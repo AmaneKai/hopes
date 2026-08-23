@@ -1570,7 +1570,10 @@ mod tests {
         app.form_field = app.form_field.next(); // -> Description
         app.focus_text_field();
         assert!(app.field_insert);
-        assert_eq!(app.text_cursor, crate::textedit::char_len(&app.form_description));
+        assert_eq!(
+            app.text_cursor,
+            crate::textedit::char_len(&app.form_description)
+        );
     }
 
     #[test]

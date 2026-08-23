@@ -21,11 +21,9 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
 
     let mut line1_left = vec![mode_span, Span::raw(" ")];
 
-    let is_text_editing_field = matches!(
-        app.mode,
-        AppMode::Filtering | AppMode::Command
-    ) || (matches!(app.mode, AppMode::Creating | AppMode::Editing)
-        && app.form_field != crate::app::FormField::Priority);
+    let is_text_editing_field = matches!(app.mode, AppMode::Filtering | AppMode::Command)
+        || (matches!(app.mode, AppMode::Creating | AppMode::Editing)
+            && app.form_field != crate::app::FormField::Priority);
     if is_text_editing_field {
         let (label, style) = if app.field_insert {
             ("-- INSERT --", Theme::field_insert_badge())

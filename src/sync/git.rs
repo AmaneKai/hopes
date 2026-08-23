@@ -150,7 +150,8 @@ mod tests {
 
     fn scratch_dir(name: &str) -> PathBuf {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("hopes-git-test-{name}-{n}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("hopes-git-test-{name}-{n}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir

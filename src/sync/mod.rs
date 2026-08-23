@@ -245,13 +245,17 @@ fn worker_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs, sync::atomic::{AtomicU32, Ordering}};
+    use std::{
+        fs,
+        sync::atomic::{AtomicU32, Ordering},
+    };
 
     static COUNTER: AtomicU32 = AtomicU32::new(0);
 
     fn scratch_dir(name: &str) -> PathBuf {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("hopes-sync-test-{name}-{n}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("hopes-sync-test-{name}-{n}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -307,7 +311,11 @@ mod tests {
         assert!(engine.enabled);
 
         for i in 0..5 {
-            fs::write(workdir.join("items.json"), format!("[{{\"title\":\"edit-{i}\"}}]")).unwrap();
+            fs::write(
+                workdir.join("items.json"),
+                format!("[{{\"title\":\"edit-{i}\"}}]"),
+            )
+            .unwrap();
             engine.request_push();
             thread::sleep(Duration::from_millis(50));
         }

@@ -54,7 +54,9 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         SyncStatus::Disabled => None,
         SyncStatus::Idle => Some(Span::styled(
             " \u{2601} Idle ",
-            Style::default().bg(Color::Rgb(40, 45, 55)).fg(Color::DarkGray),
+            Style::default()
+                .bg(Color::Rgb(40, 45, 55))
+                .fg(Color::DarkGray),
         )),
         SyncStatus::Syncing(msg) => Some(Span::styled(
             format!(" \u{2601} {msg} "),
@@ -72,7 +74,9 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         )),
         SyncStatus::Offline => Some(Span::styled(
             " \u{2601} Offline ",
-            Style::default().bg(Color::Rgb(45, 45, 45)).fg(Color::DarkGray),
+            Style::default()
+                .bg(Color::Rgb(45, 45, 45))
+                .fg(Color::DarkGray),
         )),
         SyncStatus::Conflict(_) => Some(Span::styled(
             " \u{2601} Conflict ",
