@@ -1,4 +1,5 @@
 mod app;
+mod audit;
 mod config;
 mod event;
 mod models;

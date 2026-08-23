@@ -1,4 +1,5 @@
 use crate::{
+    audit::AuditLog,
     config::Config,
     models::{Item, Priority, Status},
     storage::JsonStore,
@@ -11,6 +12,16 @@ use std::{
     collections::HashMap,
     time::{Duration, Instant},
 };
+
+/// Truncates a title to `max` chars (char-boundary safe) for compact log lines.
+fn snippet(title: &str, max: usize) -> String {
+    if title.chars().count() <= max {
+        title.to_string()
+    } else {
+        let truncated: String = title.chars().take(max).collect();
+        format!("{truncated}...")
+    }
+}
 
 #[inline(always)]
 fn contains_ignore_case(haystack: &str, needle: &str) -> bool {
@@ -226,6 +237,7 @@ pub struct App {
     pub sync_engine: SyncEngine,
     pub sync_status: SyncStatus,
     pub should_quit: bool,
+    pub audit_log: AuditLog,
 
     cached_filtered_indices: Vec<usize>,
     cached_stats: WorkspaceStats,
@@ -300,6 +312,7 @@ impl App {
             sync_engine,
             sync_status,
             should_quit: false,
+            audit_log: AuditLog::default(),
             cached_filtered_indices: Vec::new(),
             cached_stats: WorkspaceStats::default(),
             cached_tags: Vec::new(),
@@ -457,6 +470,11 @@ impl App {
             .map(|(msg, _)| msg.as_str())
     }
 
+    #[inline(always)]
+    pub fn log_audit(&mut self, message: impl Into<String>) {
+        self.audit_log.push(message);
+    }
+
     /// Drains pending sync worker events, applying UI-visible effects (reload,
     /// status messages). Returns `true` if anything was received, so the caller
     /// knows to redraw.
@@ -468,18 +486,22 @@ impl App {
                 SyncStatus::UpdatedRemoteData => {
                     self.reload_from_disk();
                     self.set_status_message("Pulled remote changes");
+                    self.log_audit("Sync: pulled remote changes");
                 }
                 SyncStatus::Offline => {
                     self.set_status_message("Offline \u{2014} will sync when connection returns");
+                    self.log_audit("Sync: offline, will retry");
                 }
                 SyncStatus::Conflict(backup) => {
                     self.reload_from_disk();
                     self.set_status_message(format!(
                         "Sync conflict \u{2014} local backup saved to {backup}"
                     ));
+                    self.log_audit(format!("Sync: conflict, backup saved to {backup}"));
                 }
                 SyncStatus::Error(e) => {
                     self.set_status_message(format!("Sync error: {e}"));
+                    self.log_audit(format!("Sync: error \u{2014} {e}"));
                 }
                 _ => {}
             }
@@ -506,6 +528,7 @@ impl App {
         if self.sync_engine.enabled {
             self.sync_engine.force_sync();
             self.set_status_message("Manual sync requested");
+            self.log_audit("Sync: manual sync requested");
         } else {
             self.set_status_message("Sync is disabled (no Git repo configured)");
         }
@@ -729,6 +752,7 @@ impl App {
                 Status::Todo => Status::Complete,
             };
             self.items[real_idx].status = new_status;
+            let title = snippet(&self.items[real_idx].title, 28);
             let _ = self.store.save(&self.items);
             self.sync_engine.request_push();
             self.refresh_cache();
@@ -736,6 +760,10 @@ impl App {
                 self.kanban_col -= 1;
             }
             self.set_status_message(format!("Shifted task to {}", new_status.label()));
+            self.log_audit(format!(
+                "Shifted \"{title}\" to {}",
+                new_status.label()
+            ));
         }
     }
 
@@ -748,6 +776,7 @@ impl App {
                 Status::Complete => Status::Todo,
             };
             self.items[real_idx].status = new_status;
+            let title = snippet(&self.items[real_idx].title, 28);
             let _ = self.store.save(&self.items);
             self.sync_engine.request_push();
             self.refresh_cache();
@@ -755,6 +784,10 @@ impl App {
                 self.kanban_col += 1;
             }
             self.set_status_message(format!("Shifted task to {}", new_status.label()));
+            self.log_audit(format!(
+                "Shifted \"{title}\" to {}",
+                new_status.label()
+            ));
         }
     }
 
@@ -839,10 +872,12 @@ impl App {
         if let Some(real_idx) = self.get_selected_real_index() {
             self.items[real_idx].status = self.items[real_idx].status.next();
             let new_status = self.items[real_idx].status.label();
+            let title = snippet(&self.items[real_idx].title, 28);
             let _ = self.store.save(&self.items);
             self.sync_engine.request_push();
             self.refresh_cache();
             self.set_status_message(format!("Status changed to {new_status}"));
+            self.log_audit(format!("\"{title}\" status \u{2192} {new_status}"));
         }
     }
 
@@ -850,10 +885,12 @@ impl App {
         if let Some(real_idx) = self.get_selected_real_index() {
             self.items[real_idx].priority = self.items[real_idx].priority.next();
             let new_prio = self.items[real_idx].priority.label();
+            let title = snippet(&self.items[real_idx].title, 28);
             let _ = self.store.save(&self.items);
             self.sync_engine.request_push();
             self.refresh_cache();
             self.set_status_message(format!("Priority set to {new_prio}"));
+            self.log_audit(format!("\"{title}\" priority \u{2192} {new_prio}"));
         }
     }
 
@@ -861,10 +898,12 @@ impl App {
         if let Some(real_idx) = self.get_selected_real_index() {
             self.items[real_idx].priority = self.items[real_idx].priority.prev();
             let new_prio = self.items[real_idx].priority.label();
+            let title = snippet(&self.items[real_idx].title, 28);
             let _ = self.store.save(&self.items);
             self.sync_engine.request_push();
             self.refresh_cache();
             self.set_status_message(format!("Priority set to {new_prio}"));
+            self.log_audit(format!("\"{title}\" priority \u{2192} {new_prio}"));
         }
     }
 
@@ -872,21 +911,19 @@ impl App {
         if let Some(real_idx) = self.get_selected_real_index() {
             self.items[real_idx].priority = priority;
             let new_prio = priority.label();
+            let title = snippet(&self.items[real_idx].title, 28);
             let _ = self.store.save(&self.items);
             self.sync_engine.request_push();
             self.refresh_cache();
             self.set_status_message(format!("Priority set to {new_prio}"));
+            self.log_audit(format!("\"{title}\" priority \u{2192} {new_prio}"));
         }
     }
 
     pub fn delete_selected(&mut self) {
         if let Some(real_idx) = self.get_selected_real_index() {
             let deleted = self.items.remove(real_idx);
-            let snippet = if deleted.title.len() > 28 {
-                format!("{}...", &deleted.title[..28])
-            } else {
-                deleted.title.clone()
-            };
+            let title = snippet(&deleted.title, 28);
             self.last_deleted = Some((real_idx, deleted));
 
             self.refresh_cache();
@@ -898,24 +935,22 @@ impl App {
             }
             let _ = self.store.save(&self.items);
             self.sync_engine.request_push();
-            self.set_status_message(format!("Deleted \"{snippet}\" (press 'u' to undo)"));
+            self.set_status_message(format!("Deleted \"{title}\" (press 'u' to undo)"));
+            self.log_audit(format!("Deleted \"{title}\""));
         }
     }
 
     pub fn undo_delete(&mut self) {
         if let Some((idx, item)) = self.last_deleted.take() {
             let insert_idx = idx.min(self.items.len());
-            let snippet = if item.title.len() > 28 {
-                format!("{}...", &item.title[..28])
-            } else {
-                item.title.clone()
-            };
+            let title = snippet(&item.title, 28);
             self.items.insert(insert_idx, item);
             let _ = self.store.save(&self.items);
             self.sync_engine.request_push();
             self.refresh_cache();
             self.table_state.select(Some(insert_idx));
-            self.set_status_message(format!("Restored \"{snippet}\""));
+            self.set_status_message(format!("Restored \"{title}\""));
+            self.log_audit(format!("Restored \"{title}\""));
         } else {
             self.set_status_message("Nothing to undo");
         }
@@ -924,11 +959,13 @@ impl App {
     pub fn move_selected_up(&mut self) {
         if let Some(real_idx) = self.get_selected_real_index().filter(|&i| i > 0) {
             self.items.swap(real_idx, real_idx - 1);
+            let title = snippet(&self.items[real_idx - 1].title, 28);
             let _ = self.store.save(&self.items);
             self.sync_engine.request_push();
             self.refresh_cache();
             self.select_prev();
             self.set_status_message("Moved task up");
+            self.log_audit(format!("Moved \"{title}\" up"));
         }
     }
 
@@ -938,11 +975,13 @@ impl App {
             .filter(|&i| i + 1 < self.items.len())
         {
             self.items.swap(real_idx, real_idx + 1);
+            let title = snippet(&self.items[real_idx + 1].title, 28);
             let _ = self.store.save(&self.items);
             self.sync_engine.request_push();
             self.refresh_cache();
             self.select_next();
             self.set_status_message("Moved task down");
+            self.log_audit(format!("Moved \"{title}\" down"));
         }
     }
 
@@ -1247,12 +1286,15 @@ impl App {
                 self.items[edit_idx].description = self.form_description.trim().to_string();
                 self.items[edit_idx].priority = self.form_priority;
                 self.items[edit_idx].tags = tags;
+                let title = snippet(&self.items[edit_idx].title, 28);
                 let _ = self.store.save(&self.items);
                 self.sync_engine.request_push();
                 self.refresh_cache();
                 self.set_status_message("Task updated");
+                self.log_audit(format!("Edited \"{title}\""));
             }
         } else {
+            let title = snippet(self.form_title.trim(), 28);
             let mut new_item = Item::new(self.form_title.trim().to_string(), tags);
             new_item.description = self.form_description.trim().to_string();
             new_item.priority = self.form_priority;
@@ -1270,6 +1312,7 @@ impl App {
             let new_sel = self.cached_filtered_indices.len().saturating_sub(1);
             self.table_state.select(Some(new_sel));
             self.set_status_message("Task created");
+            self.log_audit(format!("Created \"{title}\""));
         }
 
         self.form_edit_idx = None;

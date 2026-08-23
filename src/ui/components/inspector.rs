@@ -25,7 +25,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
 
     render_task_details(f, app, chunks[0], is_focused);
     render_analytics(f, app, chunks[1]);
-    render_quick_keys(f, chunks[2]);
+    render_audit_trail(f, app, chunks[2]);
 }
 
 fn render_task_details(f: &mut Frame, app: &App, area: Rect, is_focused: bool) {
@@ -190,44 +190,41 @@ fn render_analytics(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(para, area);
 }
 
-fn render_quick_keys(f: &mut Frame, area: Rect) {
+fn render_audit_trail(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Theme::border())
-        .title(" QUICK CHEATSHEET ")
+        .title(" AUDIT TRAIL ")
         .title_style(Theme::header_title());
 
-    let lines = vec![
-        Line::from(vec![
-            Span::styled("  j/k     ", Theme::shortcut_key()),
-            Span::styled("Navigate tasks", Theme::shortcut_desc()),
-            Span::raw("   "),
-            Span::styled("Space  ", Theme::shortcut_key()),
-            Span::styled("Toggle Status", Theme::shortcut_desc()),
-        ]),
-        Line::from(vec![
-            Span::styled("  v       ", Theme::shortcut_key()),
-            Span::styled("Table/Kanban", Theme::shortcut_desc()),
-            Span::raw("     "),
-            Span::styled("s      ", Theme::shortcut_key()),
-            Span::styled("Cycle Sort", Theme::shortcut_desc()),
-        ]),
-        Line::from(vec![
-            Span::styled("  Tab     ", Theme::shortcut_key()),
-            Span::styled("Switch Panes", Theme::shortcut_desc()),
-            Span::raw("     "),
-            Span::styled("a/e    ", Theme::shortcut_key()),
-            Span::styled("New / Edit", Theme::shortcut_desc()),
-        ]),
-        Line::from(vec![
-            Span::styled("  dd/u    ", Theme::shortcut_key()),
-            Span::styled("Del / Undo", Theme::shortcut_desc()),
-            Span::raw("       "),
-            Span::styled("?      ", Theme::shortcut_key()),
-            Span::styled("Full Cheatsheet", Theme::shortcut_desc()),
-        ]),
-    ];
+    let visible_rows = area.height.saturating_sub(2) as usize;
+
+    let lines: Vec<Line> = if visible_rows == 0 {
+        Vec::new()
+    } else {
+        let mut entries: Vec<Line> = app
+            .audit_log
+            .recent(visible_rows)
+            .map(|event| {
+                Line::from(vec![
+                    Span::styled(
+                        format!("{} ", event.timestamp.format("%m-%d %H:%M:%S")),
+                        Theme::muted(),
+                    ),
+                    Span::styled(event.message.as_str(), Theme::shortcut_desc()),
+                ])
+            })
+            .collect();
+
+        if entries.is_empty() {
+            entries.push(Line::from(Span::styled(
+                "No activity yet this session",
+                Theme::muted(),
+            )));
+        }
+        entries
+    };
 
     let para = Paragraph::new(lines).block(block);
     f.render_widget(para, area);
