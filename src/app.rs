@@ -1,7 +1,11 @@
 use crate::{
+    config::Config,
     models::{Item, Priority, Status},
     storage::JsonStore,
+    sync::{SyncEngine, SyncStatus},
+    textedit,
 };
+use crossterm::event::KeyCode;
 use ratatui::widgets::TableState;
 use std::{
     collections::HashMap,
@@ -65,6 +69,7 @@ pub enum AppMode {
     Creating,
     Editing,
     Filtering,
+    Command,
     Help,
 }
 
@@ -197,6 +202,20 @@ pub struct App {
     pub filter_input: String,
     pub tag_filter: Option<String>,
 
+    pub command_input: String,
+
+    /// Whether the currently focused text field (form title/description/tags,
+    /// filter box) is in vim Insert mode (typing) or Normal mode (motions).
+    pub field_insert: bool,
+    /// Char-index cursor within whichever text field is currently focused.
+    pub text_cursor: usize,
+    /// Pending first `d` of a `dd` chord within a text field's Normal mode.
+    pub field_pending_d: bool,
+    /// `Some(anchor)` while a text field is in Visual mode (char-wise only).
+    pub field_visual_anchor: Option<usize>,
+    /// Last yanked/deleted text field selection, for `p`/`P`.
+    pub field_clipboard: String,
+
     pub inspector_scroll: u16,
 
     pub pending_g: bool,
@@ -204,6 +223,9 @@ pub struct App {
     pub last_deleted: Option<(usize, Item)>,
     pub status_message: Option<(String, Instant)>,
     pub store: JsonStore,
+    pub sync_engine: SyncEngine,
+    pub sync_status: SyncStatus,
+    pub should_quit: bool,
 
     cached_filtered_indices: Vec<usize>,
     cached_stats: WorkspaceStats,
@@ -213,12 +235,36 @@ pub struct App {
 
 impl App {
     pub fn new() -> Self {
-        let store = JsonStore::default_path();
+        let config = Config::load();
+        let store = match &config.sync.data_dir {
+            Some(dir) => JsonStore::at_dir(dir.clone()),
+            None => JsonStore::default_path(),
+        };
+        let sync_engine = SyncEngine::spawn(
+            store.data_dir().to_path_buf(),
+            config.sync.remote.clone(),
+            config.sync.branch.clone(),
+            Duration::from_secs(config.sync.debounce_seconds),
+            config.sync.pull_on_startup,
+            config.sync.enabled,
+        );
+        Self::with_store(store, sync_engine)
+    }
+
+    /// Shared constructor so tests can point at an isolated, throwaway store
+    /// instead of the real on-disk data — see `tests::create_test_app`.
+    fn with_store(store: JsonStore, sync_engine: SyncEngine) -> Self {
         let items = store.load().unwrap_or_default();
         let mut table_state = TableState::default();
         if !items.is_empty() {
             table_state.select(Some(0));
         }
+
+        let sync_status = if sync_engine.enabled {
+            SyncStatus::Idle
+        } else {
+            SyncStatus::Disabled
+        };
 
         let mut app = Self {
             items,
@@ -239,12 +285,21 @@ impl App {
             form_edit_idx: None,
             filter_input: String::new(),
             tag_filter: None,
+            command_input: String::new(),
+            field_insert: true,
+            text_cursor: 0,
+            field_pending_d: false,
+            field_visual_anchor: None,
+            field_clipboard: String::new(),
             inspector_scroll: 0,
             pending_g: false,
             pending_d: false,
             last_deleted: None,
             status_message: None,
             store,
+            sync_engine,
+            sync_status,
+            should_quit: false,
             cached_filtered_indices: Vec::new(),
             cached_stats: WorkspaceStats::default(),
             cached_tags: Vec::new(),
@@ -400,6 +455,87 @@ impl App {
             .as_ref()
             .filter(|(_, instant)| instant.elapsed() < Duration::from_secs(4))
             .map(|(msg, _)| msg.as_str())
+    }
+
+    /// Drains pending sync worker events, applying UI-visible effects (reload,
+    /// status messages). Returns `true` if anything was received, so the caller
+    /// knows to redraw.
+    pub fn poll_sync_events(&mut self) -> bool {
+        let mut received = false;
+        while let Some(status) = self.sync_engine.try_recv() {
+            received = true;
+            match &status {
+                SyncStatus::UpdatedRemoteData => {
+                    self.reload_from_disk();
+                    self.set_status_message("Pulled remote changes");
+                }
+                SyncStatus::Offline => {
+                    self.set_status_message("Offline \u{2014} will sync when connection returns");
+                }
+                SyncStatus::Conflict(backup) => {
+                    self.reload_from_disk();
+                    self.set_status_message(format!(
+                        "Sync conflict \u{2014} local backup saved to {backup}"
+                    ));
+                }
+                SyncStatus::Error(e) => {
+                    self.set_status_message(format!("Sync error: {e}"));
+                }
+                _ => {}
+            }
+            self.sync_status = status;
+        }
+        received
+    }
+
+    pub fn reload_from_disk(&mut self) {
+        if let Ok(items) = self.store.load() {
+            self.items = items;
+            self.refresh_cache();
+            let len = self.cached_filtered_indices.len();
+            if len == 0 {
+                self.table_state.select(None);
+            } else {
+                let sel = self.table_state.selected().unwrap_or(0).min(len - 1);
+                self.table_state.select(Some(sel));
+            }
+        }
+    }
+
+    pub fn trigger_manual_sync(&mut self) {
+        if self.sync_engine.enabled {
+            self.sync_engine.force_sync();
+            self.set_status_message("Manual sync requested");
+        } else {
+            self.set_status_message("Sync is disabled (no Git repo configured)");
+        }
+    }
+
+    pub fn shutdown_sync(&mut self) {
+        self.sync_engine.shutdown(Duration::from_secs(3));
+    }
+
+    pub fn enter_command_mode(&mut self) {
+        self.command_input.clear();
+        self.mode = AppMode::Command;
+        self.focus_text_field();
+    }
+
+    /// Parses and runs the `:command` line, then always returns to Normal
+    /// mode (matching vim, where the command line closes after Enter).
+    pub fn execute_command(&mut self) {
+        match self.command_input.trim() {
+            "sync" | "s" => self.trigger_manual_sync(),
+            "q" | "quit" | "wq" => self.should_quit = true,
+            "w" => self.set_status_message("Already saved automatically"),
+            "help" | "h" => {
+                self.mode = AppMode::Help;
+                return;
+            }
+            "" => {}
+            other => self.set_status_message(format!("Unknown command: {other}")),
+        }
+        self.mode = AppMode::Normal;
     }
 
     pub fn toggle_view_mode(&mut self) {
@@ -594,6 +730,7 @@ impl App {
             };
             self.items[real_idx].status = new_status;
             let _ = self.store.save(&self.items);
+            self.sync_engine.request_push();
             self.refresh_cache();
             if self.kanban_col > 0 {
                 self.kanban_col -= 1;
@@ -612,6 +749,7 @@ impl App {
             };
             self.items[real_idx].status = new_status;
             let _ = self.store.save(&self.items);
+            self.sync_engine.request_push();
             self.refresh_cache();
             if self.kanban_col < 2 {
                 self.kanban_col += 1;
@@ -702,6 +840,7 @@ impl App {
             self.items[real_idx].status = self.items[real_idx].status.next();
             let new_status = self.items[real_idx].status.label();
             let _ = self.store.save(&self.items);
+            self.sync_engine.request_push();
             self.refresh_cache();
             self.set_status_message(format!("Status changed to {new_status}"));
         }
@@ -712,6 +851,7 @@ impl App {
             self.items[real_idx].priority = self.items[real_idx].priority.next();
             let new_prio = self.items[real_idx].priority.label();
             let _ = self.store.save(&self.items);
+            self.sync_engine.request_push();
             self.refresh_cache();
             self.set_status_message(format!("Priority set to {new_prio}"));
         }
@@ -722,6 +862,7 @@ impl App {
             self.items[real_idx].priority = self.items[real_idx].priority.prev();
             let new_prio = self.items[real_idx].priority.label();
             let _ = self.store.save(&self.items);
+            self.sync_engine.request_push();
             self.refresh_cache();
             self.set_status_message(format!("Priority set to {new_prio}"));
         }
@@ -732,6 +873,7 @@ impl App {
             self.items[real_idx].priority = priority;
             let new_prio = priority.label();
             let _ = self.store.save(&self.items);
+            self.sync_engine.request_push();
             self.refresh_cache();
             self.set_status_message(format!("Priority set to {new_prio}"));
         }
@@ -755,6 +897,7 @@ impl App {
                 self.table_state.select(Some(filtered_len - 1));
             }
             let _ = self.store.save(&self.items);
+            self.sync_engine.request_push();
             self.set_status_message(format!("Deleted \"{snippet}\" (press 'u' to undo)"));
         }
     }
@@ -769,6 +912,7 @@ impl App {
             };
             self.items.insert(insert_idx, item);
             let _ = self.store.save(&self.items);
+            self.sync_engine.request_push();
             self.refresh_cache();
             self.table_state.select(Some(insert_idx));
             self.set_status_message(format!("Restored \"{snippet}\""));
@@ -781,6 +925,7 @@ impl App {
         if let Some(real_idx) = self.get_selected_real_index().filter(|&i| i > 0) {
             self.items.swap(real_idx, real_idx - 1);
             let _ = self.store.save(&self.items);
+            self.sync_engine.request_push();
             self.refresh_cache();
             self.select_prev();
             self.set_status_message("Moved task up");
@@ -794,6 +939,7 @@ impl App {
         {
             self.items.swap(real_idx, real_idx + 1);
             let _ = self.store.save(&self.items);
+            self.sync_engine.request_push();
             self.refresh_cache();
             self.select_next();
             self.set_status_message("Moved task down");
@@ -808,6 +954,7 @@ impl App {
         self.form_field = FormField::Title;
         self.form_edit_idx = None;
         self.mode = AppMode::Creating;
+        self.focus_text_field();
     }
 
     pub fn open_edit_modal(&mut self) {
@@ -820,6 +967,265 @@ impl App {
             self.form_field = FormField::Title;
             self.form_edit_idx = Some(real_idx);
             self.mode = AppMode::Editing;
+            self.focus_text_field();
+        }
+    }
+
+    /// Returns the text buffer belonging to whichever field is currently
+    /// focused, or `None` when focus is on a non-text field (e.g. Priority).
+    fn active_text_mut(&mut self) -> Option<&mut String> {
+        match self.mode {
+            AppMode::Creating | AppMode::Editing => match self.form_field {
+                FormField::Title => Some(&mut self.form_title),
+                FormField::Description => Some(&mut self.form_description),
+                FormField::Tags => Some(&mut self.form_tags),
+                FormField::Priority => None,
+            },
+            AppMode::Filtering => Some(&mut self.filter_input),
+            AppMode::Command => Some(&mut self.command_input),
+            _ => None,
+        }
+    }
+
+    /// Only the Description field is allowed to contain literal newlines
+    /// (`o`/`O` fall back to end/start-of-line for every other field).
+    #[inline(always)]
+    fn active_field_allows_newline(&self) -> bool {
+        matches!(self.mode, AppMode::Creating | AppMode::Editing)
+            && self.form_field == FormField::Description
+    }
+
+    /// Resets the currently focused text field to fresh Insert-mode focus
+    /// with the cursor at the end — the entry point every time a field
+    /// becomes focused (opening a modal, tabbing fields, opening `/` or `:`).
+    pub fn focus_text_field(&mut self) {
+        self.field_insert = true;
+        self.field_pending_d = false;
+        self.field_visual_anchor = None;
+        self.text_cursor = self
+            .active_text_mut()
+            .map(|s| textedit::char_len(s))
+            .unwrap_or(0);
+    }
+
+    /// Runs an edit against the currently focused text field, safely — the
+    /// borrow on the field has to end before `self.text_cursor` can be
+    /// written back, so this can't just be `f(self.active_text_mut()?, ...)`.
+    fn edit_active(&mut self, f: impl FnOnce(&mut String, usize) -> usize) {
+        let cursor = self.text_cursor;
+        let mut new_cursor = None;
+        if let Some(buf) = self.active_text_mut() {
+            new_cursor = Some(f(buf, cursor));
+        }
+        if let Some(nc) = new_cursor {
+            self.text_cursor = nc;
+        }
+    }
+
+    /// Handles Esc for a focused text field: leaves Insert mode (clamping the
+    /// cursor onto a real character, vim-style) and reports that it did, or
+    /// reports `false` if the field was already in Normal mode — the caller
+    /// (`main.rs`) then treats that as "close/cancel".
+    pub fn handle_field_esc(&mut self) -> bool {
+        if self.field_insert {
+            self.field_insert = false;
+            self.field_pending_d = false;
+            self.edit_active(|buf, cursor| textedit::clamp_normal(buf, cursor));
+            return true;
+        }
+        if self.field_visual_anchor.take().is_some() {
+            return true;
+        }
+        false
+    }
+
+    /// Handles every other keystroke for a focused text field (form
+    /// title/description/tags, filter box, `:` command line) in whichever of
+    /// Insert/Normal mode it's currently in. Callers intercept Esc and Enter
+    /// themselves first — see the `AppMode::Creating`/`Filtering` handling in
+    /// `main.rs`.
+    pub fn handle_text_key(&mut self, code: KeyCode, ctrl: bool) {
+        let allow_newline = self.active_field_allows_newline();
+
+        if self.field_insert {
+            match code {
+                KeyCode::Char('w') if ctrl => {
+                    self.edit_active(|buf, _| {
+                        App::delete_word_back(buf);
+                        textedit::char_len(buf)
+                    });
+                }
+                KeyCode::Char('u') if ctrl => {
+                    self.edit_active(|buf, _| {
+                        buf.clear();
+                        0
+                    });
+                }
+                KeyCode::Enter if allow_newline => {
+                    self.edit_active(|buf, cursor| textedit::insert_char(buf, cursor, '\n'));
+                }
+                KeyCode::Char(c) => {
+                    self.edit_active(|buf, cursor| textedit::insert_char(buf, cursor, c));
+                }
+                KeyCode::Backspace => {
+                    self.edit_active(textedit::backspace);
+                }
+                KeyCode::Left => {
+                    self.edit_active(|buf, cursor| textedit::caret_left(buf, cursor));
+                }
+                KeyCode::Right => {
+                    self.edit_active(|buf, cursor| textedit::caret_right(buf, cursor));
+                }
+                KeyCode::Up if allow_newline => {
+                    self.edit_active(|buf, cursor| textedit::caret_up(buf, cursor));
+                }
+                KeyCode::Down if allow_newline => {
+                    self.edit_active(|buf, cursor| textedit::caret_down(buf, cursor));
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        // Field-Normal mode: vim motions.
+        if self.field_pending_d {
+            self.field_pending_d = false;
+            if code == KeyCode::Char('d') {
+                self.edit_active(textedit::delete_line);
+                return;
+            }
+            // any other key cancels the pending 'd' and falls through below
+        }
+
+        if let Some(anchor) = self.field_visual_anchor {
+            self.handle_visual_key(code, anchor, allow_newline);
+            return;
+        }
+
+        match code {
+            KeyCode::Char('d') => self.field_pending_d = true,
+            KeyCode::Char('v') => self.field_visual_anchor = Some(self.text_cursor),
+            KeyCode::Char('p') => {
+                let clip = self.field_clipboard.clone();
+                self.edit_active(move |buf, cursor| textedit::paste_after(buf, cursor, &clip));
+            }
+            KeyCode::Char('P') => {
+                let clip = self.field_clipboard.clone();
+                self.edit_active(move |buf, cursor| textedit::paste_before(buf, cursor, &clip));
+            }
+            KeyCode::Char('h') | KeyCode::Left => {
+                self.edit_active(|buf, cursor| textedit::move_left(buf, cursor));
+            }
+            KeyCode::Char('l') | KeyCode::Right => {
+                self.edit_active(|buf, cursor| textedit::move_right(buf, cursor));
+            }
+            KeyCode::Char('j') | KeyCode::Down if allow_newline => {
+                self.edit_active(|buf, cursor| textedit::move_down(buf, cursor));
+            }
+            KeyCode::Char('k') | KeyCode::Up if allow_newline => {
+                self.edit_active(|buf, cursor| textedit::move_up(buf, cursor));
+            }
+            KeyCode::Char('0') => {
+                self.edit_active(|buf, cursor| textedit::line_start(buf, cursor));
+            }
+            KeyCode::Char('$') => {
+                self.edit_active(|buf, cursor| textedit::line_end(buf, cursor));
+            }
+            KeyCode::Char('w') => {
+                self.edit_active(|buf, cursor| textedit::word_forward(buf, cursor));
+            }
+            KeyCode::Char('e') => {
+                self.edit_active(|buf, cursor| textedit::word_end(buf, cursor));
+            }
+            KeyCode::Char('b') => {
+                self.edit_active(|buf, cursor| textedit::word_back(buf, cursor));
+            }
+            KeyCode::Char('x') => {
+                self.edit_active(textedit::delete_char);
+            }
+            KeyCode::Char('D') => {
+                self.edit_active(textedit::delete_to_line_end);
+            }
+            KeyCode::Char('i') => {
+                self.edit_active(|buf, cursor| textedit::enter_insert_before(buf, cursor));
+                self.field_insert = true;
+            }
+            KeyCode::Char('a') => {
+                self.edit_active(|buf, cursor| textedit::enter_insert_after(buf, cursor));
+                self.field_insert = true;
+            }
+            KeyCode::Char('I') => {
+                self.edit_active(|buf, cursor| textedit::enter_insert_line_start(buf, cursor));
+                self.field_insert = true;
+            }
+            KeyCode::Char('A') => {
+                self.edit_active(|buf, cursor| textedit::enter_insert_line_end(buf, cursor));
+                self.field_insert = true;
+            }
+            KeyCode::Char('o') => {
+                self.edit_active(|buf, cursor| textedit::open_below(buf, cursor, allow_newline));
+                self.field_insert = true;
+            }
+            KeyCode::Char('O') => {
+                self.edit_active(|buf, cursor| textedit::open_above(buf, cursor, allow_newline));
+                self.field_insert = true;
+            }
+            _ => {}
+        }
+    }
+
+    /// Handles a keystroke while a text field is in Visual mode (char-wise
+    /// only — no linewise `V` or blockwise `<C-v>`). Motions extend the
+    /// selection by moving the cursor while `anchor` stays fixed; `d`/`x`/`y`
+    /// act on the normalized [lo, hi] range and exit back to Normal mode.
+    fn handle_visual_key(&mut self, code: KeyCode, anchor: usize, allow_newline: bool) {
+        match code {
+            KeyCode::Char('v') => self.field_visual_anchor = None,
+            KeyCode::Char('h') | KeyCode::Left => {
+                self.edit_active(|buf, cursor| textedit::move_left(buf, cursor));
+            }
+            KeyCode::Char('l') | KeyCode::Right => {
+                self.edit_active(|buf, cursor| textedit::move_right(buf, cursor));
+            }
+            KeyCode::Char('j') | KeyCode::Down if allow_newline => {
+                self.edit_active(|buf, cursor| textedit::move_down(buf, cursor));
+            }
+            KeyCode::Char('k') | KeyCode::Up if allow_newline => {
+                self.edit_active(|buf, cursor| textedit::move_up(buf, cursor));
+            }
+            KeyCode::Char('0') => {
+                self.edit_active(|buf, cursor| textedit::line_start(buf, cursor));
+            }
+            KeyCode::Char('$') => {
+                self.edit_active(|buf, cursor| textedit::line_end(buf, cursor));
+            }
+            KeyCode::Char('w') => {
+                self.edit_active(|buf, cursor| textedit::word_forward(buf, cursor));
+            }
+            KeyCode::Char('e') => {
+                self.edit_active(|buf, cursor| textedit::word_end(buf, cursor));
+            }
+            KeyCode::Char('b') => {
+                self.edit_active(|buf, cursor| textedit::word_back(buf, cursor));
+            }
+            KeyCode::Char('y') => {
+                let (lo, hi) = textedit::selection_range(anchor, self.text_cursor);
+                if let Some(buf) = self.active_text_mut() {
+                    self.field_clipboard = textedit::yank_range(buf, lo, hi);
+                }
+                self.text_cursor = lo;
+                self.field_visual_anchor = None;
+            }
+            KeyCode::Char('d') | KeyCode::Char('x') | KeyCode::Char('c') => {
+                let (lo, hi) = textedit::selection_range(anchor, self.text_cursor);
+                if let Some(buf) = self.active_text_mut() {
+                    self.field_clipboard = textedit::yank_range(buf, lo, hi);
+                }
+                self.edit_active(|buf, _| textedit::delete_range(buf, lo, hi));
+                self.field_visual_anchor = None;
+                self.field_insert = code == KeyCode::Char('c');
+            }
+            _ => {}
         }
     }
 
@@ -842,6 +1248,7 @@ impl App {
                 self.items[edit_idx].priority = self.form_priority;
                 self.items[edit_idx].tags = tags;
                 let _ = self.store.save(&self.items);
+                self.sync_engine.request_push();
                 self.refresh_cache();
                 self.set_status_message("Task updated");
             }
@@ -858,6 +1265,7 @@ impl App {
             }
             self.items.push(new_item);
             let _ = self.store.save(&self.items);
+            self.sync_engine.request_push();
             self.refresh_cache();
             let new_sel = self.cached_filtered_indices.len().saturating_sub(1);
             self.table_state.select(Some(new_sel));
@@ -946,7 +1354,25 @@ mod tests {
     use super::*;
 
     fn create_test_app() -> App {
-        let mut app = App::new();
+        // Use a throwaway temp directory, never the real on-disk data — a
+        // previous version of this test called `App::new()` directly, which
+        // pointed straight at the user's real ~/.local/share/hopes/items.json
+        // and clobbered it the moment any mutating test method ran.
+        let dir = std::env::temp_dir().join(format!(
+            "hopes-app-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let store = crate::storage::JsonStore::at_dir(dir);
+        let sync_engine = crate::sync::SyncEngine::spawn(
+            store.data_dir().to_path_buf(),
+            "origin".to_string(),
+            "main".to_string(),
+            Duration::from_secs(5),
+            false,
+            false,
+        );
+        let mut app = App::with_store(store, sync_engine);
         app.items = vec![
             Item::new(
                 "Write compiler backend".to_string(),
@@ -1077,5 +1503,184 @@ mod tests {
 
         app.kanban_left();
         assert_eq!(app.kanban_col, 0);
+    }
+
+    #[test]
+    fn insert_mode_types_at_cursor_not_just_at_the_end() {
+        let mut app = create_test_app();
+        app.open_create_modal();
+        assert!(app.field_insert);
+        assert_eq!(app.form_field, FormField::Title);
+
+        for c in "helloworld".chars() {
+            app.handle_text_key(KeyCode::Char(c), false);
+        }
+        assert_eq!(app.form_title, "helloworld");
+        assert_eq!(app.text_cursor, 10);
+
+        // Move left 5 (to right after "hello") and insert a space.
+        for _ in 0..5 {
+            app.handle_text_key(KeyCode::Left, false);
+        }
+        app.handle_text_key(KeyCode::Char(' '), false);
+        assert_eq!(app.form_title, "hello world");
+        assert_eq!(app.text_cursor, 6);
+    }
+
+    #[test]
+    fn esc_leaves_insert_before_cancelling_the_modal() {
+        let mut app = create_test_app();
+        app.open_create_modal();
+        app.form_title = "draft".to_string();
+        app.text_cursor = 5;
+
+        // First Esc: still Insert -> drops to field-Normal, modal stays open.
+        assert!(app.handle_field_esc());
+        assert!(!app.field_insert);
+        assert_eq!(app.mode, AppMode::Creating);
+        assert_eq!(app.form_title, "draft"); // untouched
+
+        // Second Esc: already Normal -> caller (main.rs) closes the modal.
+        assert!(!app.handle_field_esc());
+    }
+
+    #[test]
+    fn dd_in_field_normal_mode_clears_a_single_line_field() {
+        let mut app = create_test_app();
+        app.open_create_modal();
+        app.form_title = "delete me".to_string();
+        app.text_cursor = 3;
+        app.field_insert = false;
+
+        app.handle_text_key(KeyCode::Char('d'), false);
+        assert!(app.field_pending_d);
+        app.handle_text_key(KeyCode::Char('d'), false);
+        assert!(!app.field_pending_d);
+        assert_eq!(app.form_title, "");
+    }
+
+    #[test]
+    fn tabbing_between_fields_resets_to_insert_at_the_end() {
+        let mut app = create_test_app();
+        app.open_create_modal();
+        app.form_title = "abc".to_string();
+        app.field_insert = false;
+        app.text_cursor = 0;
+
+        app.form_field = app.form_field.next(); // -> Description
+        app.focus_text_field();
+        assert!(app.field_insert);
+        assert_eq!(app.text_cursor, crate::textedit::char_len(&app.form_description));
+    }
+
+    #[test]
+    fn command_quit_sets_should_quit() {
+        let mut app = create_test_app();
+        app.enter_command_mode();
+        app.command_input = "q".to_string();
+        app.execute_command();
+        assert!(app.should_quit);
+        assert_eq!(app.mode, AppMode::Normal);
+    }
+
+    #[test]
+    fn command_sync_triggers_manual_sync_without_leaving_early() {
+        let mut app = create_test_app();
+        app.enter_command_mode();
+        app.command_input = "sync".to_string();
+        app.execute_command();
+        assert_eq!(app.mode, AppMode::Normal);
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn unknown_command_reports_status_and_returns_to_normal() {
+        let mut app = create_test_app();
+        app.enter_command_mode();
+        app.command_input = "bogus".to_string();
+        app.execute_command();
+        assert_eq!(app.mode, AppMode::Normal);
+        assert!(
+            app.get_status_message()
+                .unwrap_or_default()
+                .contains("Unknown command")
+        );
+    }
+
+    #[test]
+    fn visual_mode_delete_removes_selection_and_exits_visual() {
+        let mut app = create_test_app();
+        app.open_create_modal();
+        app.form_title = "hello world".to_string();
+        app.field_insert = false;
+        app.text_cursor = 0;
+
+        app.handle_text_key(KeyCode::Char('v'), false);
+        assert!(app.field_visual_anchor.is_some());
+
+        for _ in 0..4 {
+            app.handle_text_key(KeyCode::Char('l'), false); // extend to "hello"
+        }
+        app.handle_text_key(KeyCode::Char('d'), false);
+
+        assert_eq!(app.form_title, " world");
+        assert!(app.field_visual_anchor.is_none());
+        assert_eq!(app.field_clipboard, "hello");
+    }
+
+    #[test]
+    fn visual_mode_yank_then_normal_mode_paste() {
+        let mut app = create_test_app();
+        app.open_create_modal();
+        app.form_title = "hello world".to_string();
+        app.field_insert = false;
+        app.text_cursor = 6; // 'w' of world
+
+        app.handle_text_key(KeyCode::Char('v'), false);
+        for _ in 0..4 {
+            app.handle_text_key(KeyCode::Char('l'), false); // extend to "world"
+        }
+        app.handle_text_key(KeyCode::Char('y'), false);
+        assert_eq!(app.field_clipboard, "world");
+        assert!(app.field_visual_anchor.is_none());
+        assert_eq!(app.form_title, "hello world"); // yank doesn't mutate
+
+        app.text_cursor = 4; // resting on the 'o' at the end of "hello"
+        app.handle_text_key(KeyCode::Char('p'), false);
+        assert_eq!(app.form_title, "helloworld world");
+    }
+
+    #[test]
+    fn visual_mode_change_deletes_and_enters_insert() {
+        let mut app = create_test_app();
+        app.open_create_modal();
+        app.form_title = "abcdef".to_string();
+        app.field_insert = false;
+        app.text_cursor = 1;
+
+        app.handle_text_key(KeyCode::Char('v'), false);
+        app.handle_text_key(KeyCode::Char('l'), false); // select "bc"
+        app.handle_text_key(KeyCode::Char('c'), false);
+
+        assert_eq!(app.form_title, "adef");
+        assert!(app.field_insert);
+        assert!(app.field_visual_anchor.is_none());
+    }
+
+    #[test]
+    fn esc_exits_visual_mode_without_editing_before_cancelling_modal() {
+        let mut app = create_test_app();
+        app.open_create_modal();
+        app.form_title = "keep me".to_string();
+        app.field_insert = false;
+        app.text_cursor = 0;
+        app.handle_text_key(KeyCode::Char('v'), false);
+
+        assert!(app.handle_field_esc()); // exits visual, modal stays open
+        assert!(app.field_visual_anchor.is_none());
+        assert_eq!(app.mode, AppMode::Creating);
+        assert_eq!(app.form_title, "keep me");
+
+        assert!(!app.handle_field_esc()); // plain Normal now -> caller cancels
     }
 }

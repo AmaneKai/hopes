@@ -1,5 +1,6 @@
 use crate::{
     app::{App, FocusPane, ViewMode},
+    sync::SyncStatus,
     ui::theme::Theme,
 };
 use ratatui::{
@@ -49,7 +50,47 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         Style::default().bg(Color::Rgb(35, 45, 50)).fg(Color::White),
     );
 
-    let mut left_spans = Vec::with_capacity(9);
+    let sync_badge = match &app.sync_status {
+        SyncStatus::Disabled => None,
+        SyncStatus::Idle => Some(Span::styled(
+            " \u{2601} Idle ",
+            Style::default().bg(Color::Rgb(40, 45, 55)).fg(Color::DarkGray),
+        )),
+        SyncStatus::Syncing(msg) => Some(Span::styled(
+            format!(" \u{2601} {msg} "),
+            Style::default()
+                .bg(Color::Rgb(60, 55, 20))
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
+        SyncStatus::Synced | SyncStatus::UpdatedRemoteData => Some(Span::styled(
+            " \u{2601} Synced ",
+            Style::default()
+                .bg(Color::Rgb(20, 60, 30))
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        )),
+        SyncStatus::Offline => Some(Span::styled(
+            " \u{2601} Offline ",
+            Style::default().bg(Color::Rgb(45, 45, 45)).fg(Color::DarkGray),
+        )),
+        SyncStatus::Conflict(_) => Some(Span::styled(
+            " \u{2601} Conflict ",
+            Style::default()
+                .bg(Color::Red)
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )),
+        SyncStatus::Error(_) => Some(Span::styled(
+            " \u{2601} Sync Error ",
+            Style::default()
+                .bg(Color::Rgb(90, 20, 20))
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )),
+    };
+
+    let mut left_spans = Vec::with_capacity(11);
     left_spans.push(Span::styled(" HOPES ", Theme::header_brand()));
     left_spans.push(Span::raw(" "));
     left_spans.push(view_pill);
@@ -57,6 +98,11 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
     left_spans.push(sort_pill);
     left_spans.push(Span::raw(" "));
     left_spans.push(pane_pill);
+
+    if let Some(badge) = sync_badge {
+        left_spans.push(Span::raw(" "));
+        left_spans.push(badge);
+    }
 
     if let Some(ref filter) = app.tag_filter {
         left_spans.push(Span::raw(" "));

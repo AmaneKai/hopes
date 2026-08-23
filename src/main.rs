@@ -1,7 +1,10 @@
 mod app;
+mod config;
 mod event;
 mod models;
 mod storage;
+mod sync;
+mod textedit;
 mod tui;
 mod ui;
 
@@ -17,9 +20,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut needs_draw = true;
 
     loop {
+        if app.poll_sync_events() {
+            needs_draw = true;
+        }
+
         if needs_draw || app.get_status_message().is_some() {
             terminal.draw(|f| ui::render(f, &mut app))?;
             needs_draw = false;
+        }
+
+        if app.should_quit {
+            break;
         }
 
         if let Event::Key(key) = events.next()? {
@@ -233,6 +244,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         app.pending_d = false;
                         app.filter_input = app.tag_filter.clone().unwrap_or_default();
                         app.mode = AppMode::Filtering;
+                        app.focus_text_field();
+                    }
+                    KeyCode::Char(':') => {
+                        app.pending_g = false;
+                        app.pending_d = false;
+                        app.enter_command_mode();
                     }
                     KeyCode::Char('t') => {
                         app.pending_g = false;
@@ -251,6 +268,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         app.mode = AppMode::Help;
                     }
 
+                    KeyCode::Char('S') | KeyCode::F(5) => {
+                        app.pending_g = false;
+                        app.pending_d = false;
+                        app.trigger_manual_sync();
+                    }
+
                     _ => {
                         app.pending_g = false;
                         app.pending_d = false;
@@ -258,8 +281,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 },
 
                 AppMode::Creating | AppMode::Editing => {
-                    if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
+                    if ctrl && key.code == KeyCode::Char('c') {
                         app.mode = AppMode::Normal;
+                        continue;
+                    }
+
+                    if key.code == KeyCode::Esc {
+                        if app.form_field == FormField::Priority || !app.handle_field_esc() {
+                            app.mode = AppMode::Normal;
+                        }
                         continue;
                     }
 
@@ -275,6 +305,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         || (key.code == KeyCode::Down && app.form_field != FormField::Description)
                     {
                         app.form_field = app.form_field.next();
+                        app.focus_text_field();
                         continue;
                     }
                     if (ctrl && (key.code == KeyCode::Char('k') || key.code == KeyCode::Char('p')))
@@ -282,33 +313,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         || (key.code == KeyCode::Up && app.form_field != FormField::Description)
                     {
                         app.form_field = app.form_field.prev();
+                        app.focus_text_field();
                         continue;
                     }
 
                     match app.form_field {
-                        FormField::Title => match key.code {
-                            KeyCode::Char('w') if ctrl => {
-                                App::delete_word_back(&mut app.form_title)
-                            }
-                            KeyCode::Char('u') if ctrl => app.form_title.clear(),
-                            KeyCode::Char(c) => app.form_title.push(c),
-                            KeyCode::Backspace => {
-                                app.form_title.pop();
-                            }
-                            _ => {}
-                        },
-                        FormField::Description => match key.code {
-                            KeyCode::Char('w') if ctrl => {
-                                App::delete_word_back(&mut app.form_description)
-                            }
-                            KeyCode::Char('u') if ctrl => app.form_description.clear(),
-                            KeyCode::Enter => app.form_description.push('\n'),
-                            KeyCode::Char(c) => app.form_description.push(c),
-                            KeyCode::Backspace => {
-                                app.form_description.pop();
-                            }
-                            _ => {}
-                        },
+                        FormField::Title | FormField::Description | FormField::Tags => {
+                            app.handle_text_key(key.code, ctrl);
+                        }
                         FormField::Priority => match key.code {
                             KeyCode::Char(' ')
                             | KeyCode::Char('l')
@@ -326,20 +338,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             _ => {}
                         },
-                        FormField::Tags => match key.code {
-                            KeyCode::Char('w') if ctrl => App::delete_word_back(&mut app.form_tags),
-                            KeyCode::Char('u') if ctrl => app.form_tags.clear(),
-                            KeyCode::Char(c) => app.form_tags.push(c),
-                            KeyCode::Backspace => {
-                                app.form_tags.pop();
-                            }
-                            _ => {}
-                        },
                     }
                 }
 
-                AppMode::Filtering => match key.code {
-                    KeyCode::Enter => {
+                AppMode::Filtering => {
+                    if key.code == KeyCode::Enter {
                         let query = app.filter_input.trim();
                         if query.is_empty() {
                             app.tag_filter = None;
@@ -349,22 +352,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         app.refresh_cache();
                         app.table_state.select(Some(0));
                         app.mode = AppMode::Normal;
+                        continue;
                     }
-                    KeyCode::Esc => {
-                        app.mode = AppMode::Normal;
+                    if key.code == KeyCode::Esc {
+                        if !app.handle_field_esc() {
+                            app.mode = AppMode::Normal;
+                        }
+                        continue;
                     }
-                    KeyCode::Char('w') if ctrl => App::delete_word_back(&mut app.filter_input),
-                    KeyCode::Char('u') if ctrl => app.filter_input.clear(),
-                    KeyCode::Char(c) => {
-                        app.filter_input.push(c);
-                        app.table_state.select(Some(0));
+                    app.handle_text_key(key.code, ctrl);
+                    app.table_state.select(Some(0));
+                }
+
+                AppMode::Command => {
+                    if key.code == KeyCode::Enter {
+                        app.execute_command();
+                        continue;
                     }
-                    KeyCode::Backspace => {
-                        app.filter_input.pop();
-                        app.table_state.select(Some(0));
+                    if key.code == KeyCode::Esc {
+                        if !app.handle_field_esc() {
+                            app.mode = AppMode::Normal;
+                        }
+                        continue;
                     }
-                    _ => {}
-                },
+                    app.handle_text_key(key.code, ctrl);
+                }
 
                 AppMode::Help => match key.code {
                     KeyCode::Esc
@@ -380,6 +392,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    app.shutdown_sync();
     tui::restore()?;
     Ok(())
 }

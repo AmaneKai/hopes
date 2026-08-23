@@ -2,7 +2,7 @@ use crate::models::Item;
 use std::{
     fs::{self, File},
     io::{self, BufWriter, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 pub struct JsonStore {
@@ -11,11 +11,21 @@ pub struct JsonStore {
 
 impl JsonStore {
     pub fn default_path() -> Self {
-        let mut path = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."));
-        path.push("hopes");
-        let _ = fs::create_dir_all(&path);
-        path.push("items.json");
-        Self { path }
+        let mut dir = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."));
+        dir.push("hopes");
+        Self::at_dir(dir)
+    }
+
+    pub fn at_dir(dir: PathBuf) -> Self {
+        let _ = fs::create_dir_all(&dir);
+        Self {
+            path: dir.join("items.json"),
+        }
+    }
+
+    #[inline(always)]
+    pub fn data_dir(&self) -> &Path {
+        self.path.parent().unwrap_or(Path::new("."))
     }
 
     pub fn load(&self) -> io::Result<Vec<Item>> {

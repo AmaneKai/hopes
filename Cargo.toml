@@ -9,6 +9,7 @@ dirs = "6.0.0"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
 serde_json = { version = "1.0", default-features = false, features = ["std", "alloc"] }
+toml = "0.8"
 
 [profile.dev]
 opt-level = 0

@@ -63,6 +63,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
     match app.mode {
         AppMode::Creating | AppMode::Editing => components::modal::render_form_modal(f, app),
         AppMode::Filtering => components::modal::render_filter_modal(f, app),
+        AppMode::Command => components::modal::render_command_modal(f, app),
         AppMode::Help => components::modal::render_help_modal(f),
         AppMode::Normal => {}
     }

@@ -108,6 +108,42 @@ impl Theme {
     }
 
     #[inline(always)]
+    pub fn mode_command() -> Style {
+        Style::default()
+            .bg(Color::Rgb(60, 60, 60))
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD)
+    }
+
+    #[inline(always)]
+    pub fn field_insert_badge() -> Style {
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD)
+    }
+
+    #[inline(always)]
+    pub fn field_normal_badge() -> Style {
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    }
+
+    #[inline(always)]
+    pub fn field_visual_badge() -> Style {
+        Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD)
+    }
+
+    #[inline(always)]
+    pub fn field_selection() -> Style {
+        Style::default()
+            .bg(Color::Rgb(80, 65, 110))
+            .fg(Color::White)
+    }
+
+    #[inline(always)]
     pub fn status_message() -> Style {
         Style::default()
             .fg(Color::Yellow)
