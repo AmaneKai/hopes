@@ -760,10 +760,7 @@ impl App {
                 self.kanban_col -= 1;
             }
             self.set_status_message(format!("Shifted task to {}", new_status.label()));
-            self.log_audit(format!(
-                "Shifted \"{title}\" to {}",
-                new_status.label()
-            ));
+            self.log_audit(format!("Shifted \"{title}\" to {}", new_status.label()));
         }
     }
 
@@ -784,10 +781,7 @@ impl App {
                 self.kanban_col += 1;
             }
             self.set_status_message(format!("Shifted task to {}", new_status.label()));
-            self.log_audit(format!(
-                "Shifted \"{title}\" to {}",
-                new_status.label()
-            ));
+            self.log_audit(format!("Shifted \"{title}\" to {}", new_status.label()));
         }
     }
 
