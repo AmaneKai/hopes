@@ -1,3 +1,4 @@
+use super::Storage;
 use crate::models::Item;
 use std::{
     fs::{self, File},
@@ -10,25 +11,21 @@ pub struct JsonStore {
 }
 
 impl JsonStore {
-    pub fn default_path() -> Self {
-        let mut dir = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."));
-        dir.push("hopes");
-        Self::at_dir(dir)
-    }
-
     pub fn at_dir(dir: PathBuf) -> Self {
         let _ = fs::create_dir_all(&dir);
         Self {
             path: dir.join("items.json"),
         }
     }
+}
 
+impl Storage for JsonStore {
     #[inline(always)]
-    pub fn data_dir(&self) -> &Path {
+    fn data_dir(&self) -> &Path {
         self.path.parent().unwrap_or(Path::new("."))
     }
 
-    pub fn load(&self) -> io::Result<Vec<Item>> {
+    fn load(&self) -> io::Result<Vec<Item>> {
         if !self.path.exists() {
             return Ok(Vec::new());
         }
@@ -38,7 +35,7 @@ impl JsonStore {
         Ok(items)
     }
 
-    pub fn save(&self, items: &[Item]) -> io::Result<()> {
+    fn save(&self, items: &[Item]) -> io::Result<()> {
         let tmp_path = self.path.with_extension("tmp");
         {
             let file = File::create(&tmp_path)?;

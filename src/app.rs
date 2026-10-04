@@ -1,8 +1,8 @@
 use crate::{
     audit::AuditLog,
-    config::Config,
+    config::{Backend, Config},
     models::{Item, Priority, Status},
-    storage::JsonStore,
+    storage::{self, Storage},
     sync::{SyncEngine, SyncStatus},
     textedit,
 };
@@ -233,7 +233,7 @@ pub struct App {
     pub pending_d: bool,
     pub last_deleted: Option<(usize, Item)>,
     pub status_message: Option<(String, Instant)>,
-    pub store: JsonStore,
+    pub store: Box<dyn Storage>,
     pub sync_engine: SyncEngine,
     pub sync_status: SyncStatus,
     pub should_quit: bool,
@@ -248,24 +248,26 @@ pub struct App {
 impl App {
     pub fn new() -> Self {
         let config = Config::load();
-        let store = match &config.sync.data_dir {
-            Some(dir) => JsonStore::at_dir(dir.clone()),
-            None => JsonStore::default_path(),
-        };
+        let store =
+            storage::open(&config.storage, config.sync.data_dir.as_ref()).unwrap_or_else(|e| {
+                eprintln!("hopes: {e}");
+                std::process::exit(1);
+            });
         let sync_engine = SyncEngine::spawn(
             store.data_dir().to_path_buf(),
             config.sync.remote.clone(),
             config.sync.branch.clone(),
             Duration::from_secs(config.sync.debounce_seconds),
             config.sync.pull_on_startup,
-            config.sync.enabled,
+            // Git sync only knows how to ship `items.json`.
+            config.sync.enabled && config.storage.backend == Backend::Json,
         );
         Self::with_store(store, sync_engine)
     }
 
     /// Shared constructor so tests can point at an isolated, throwaway store
     /// instead of the real on-disk data — see `tests::create_test_app`.
-    fn with_store(store: JsonStore, sync_engine: SyncEngine) -> Self {
+    fn with_store(store: Box<dyn Storage>, sync_engine: SyncEngine) -> Self {
         let items = store.load().unwrap_or_default();
         let mut table_state = TableState::default();
         if !items.is_empty() {
@@ -1400,7 +1402,7 @@ mod tests {
             std::process::id(),
             std::thread::current().id()
         ));
-        let store = crate::storage::JsonStore::at_dir(dir);
+        let store: Box<dyn Storage> = Box::new(crate::storage::JsonStore::at_dir(dir));
         let sync_engine = crate::sync::SyncEngine::spawn(
             store.data_dir().to_path_buf(),
             "origin".to_string(),

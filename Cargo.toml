@@ -11,6 +11,7 @@ ratatui = { version = "0.30.2", default-features = false, features = ["crossterm
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
 serde_json = { version = "1.0", default-features = false, features = ["std", "alloc"] }
 toml = "0.8"
+rusqlite = { version = "0.40", features = ["bundled"], optional = true }
 
 [profile.dev]
 opt-level = 0
@@ -33,3 +34,6 @@ opt-level = 0
 debug = 0
 
 
+
+[features]
+sqlite = ["dep:rusqlite"]
