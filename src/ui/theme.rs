@@ -1,45 +1,85 @@
-use ratatui::style::{Color, Modifier, Style};
+use crate::models::Priority;
+use ratatui::{
+    style::{Color, Modifier, Style},
+    text::Span,
+    widgets::{Block, Borders, Padding},
+};
 
+/// Style helpers. Only ANSI names and `Reset` are used (no RGB), so the UI follows
+/// whatever palette the terminal is running, light or dark.
 pub struct Theme;
 
 impl Theme {
+    /// Colored priority glyph followed by a space.
+    pub fn priority_marker(priority: Priority) -> Span<'static> {
+        Span::styled(
+            format!("{} ", priority.glyph()),
+            Style::default().fg(priority.color()),
+        )
+    }
+
+    /// Gutter shown before a selectable row: cursor, current selection, or blank.
+    pub fn cursor_prefix(is_cursor: bool, is_current: bool) -> &'static str {
+        if is_cursor {
+            "> "
+        } else if is_current {
+            "\u{25cf} "
+        } else {
+            "  "
+        }
+    }
+
+    /// A pane titled in the standard focus-dependent style.
+    pub fn titled_pane(title: impl Into<String>, focused: bool) -> Block<'static> {
+        Self::pane(title.into(), Self::pane_title(focused), focused)
+    }
+
+    /// A borderless pane: a single left rule (brighter when focused), horizontal
+    /// padding, and the title on the first row. Titles carry a leading space so they
+    /// line up with the padded content.
+    pub fn pane(title: String, title_style: Style, focused: bool) -> Block<'static> {
+        Block::default()
+            .borders(Borders::LEFT)
+            .border_style(if focused {
+                Self::border_focused()
+            } else {
+                Self::border()
+            })
+            .padding(Padding::horizontal(1))
+            .title(format!(" {title}"))
+            .title_style(title_style)
+    }
+
+    #[inline(always)]
+    pub fn pane_title(focused: bool) -> Style {
+        if focused {
+            Self::text_bold()
+        } else {
+            Self::section()
+        }
+    }
+
     #[inline(always)]
     pub fn border() -> Style {
-        Style::default().fg(Color::Rgb(75, 82, 99))
+        Style::default().fg(Color::DarkGray)
     }
 
     #[inline(always)]
     pub fn border_focused() -> Style {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(Color::Reset)
     }
 
-    #[inline(always)]
-    pub fn header_title() -> Style {
-        Style::default()
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD)
-    }
-
-    #[inline(always)]
-    pub fn header_brand() -> Style {
-        Style::default()
-            .bg(Color::Rgb(32, 40, 54))
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD)
-    }
-
+    /// Cursor row: bold, no background.
     #[inline(always)]
     pub fn highlight() -> Style {
-        Style::default()
-            .bg(Color::Rgb(38, 44, 58))
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD)
+        Style::default().add_modifier(Modifier::BOLD)
     }
 
+    /// Small section heading ("Views", "Tags", ...).
     #[inline(always)]
-    pub fn table_header() -> Style {
+    pub fn section() -> Style {
         Style::default()
-            .fg(Color::Rgb(150, 160, 180))
+            .fg(Color::DarkGray)
             .add_modifier(Modifier::BOLD)
     }
 
@@ -62,57 +102,13 @@ impl Theme {
 
     #[inline(always)]
     pub fn text_bold() -> Style {
-        Style::default()
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD)
+        Style::default().add_modifier(Modifier::BOLD)
     }
 
+    /// Mode label in the footer: colored text, no fill.
     #[inline(always)]
-    pub fn mode_normal() -> Style {
-        Style::default()
-            .bg(Color::Green)
-            .fg(Color::Black)
-            .add_modifier(Modifier::BOLD)
-    }
-
-    #[inline(always)]
-    pub fn mode_insert() -> Style {
-        Style::default()
-            .bg(Color::Cyan)
-            .fg(Color::Black)
-            .add_modifier(Modifier::BOLD)
-    }
-
-    #[inline(always)]
-    pub fn mode_edit() -> Style {
-        Style::default()
-            .bg(Color::Magenta)
-            .fg(Color::Black)
-            .add_modifier(Modifier::BOLD)
-    }
-
-    #[inline(always)]
-    pub fn mode_filter() -> Style {
-        Style::default()
-            .bg(Color::Yellow)
-            .fg(Color::Black)
-            .add_modifier(Modifier::BOLD)
-    }
-
-    #[inline(always)]
-    pub fn mode_help() -> Style {
-        Style::default()
-            .bg(Color::Blue)
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD)
-    }
-
-    #[inline(always)]
-    pub fn mode_command() -> Style {
-        Style::default()
-            .bg(Color::Rgb(60, 60, 60))
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD)
+    pub fn mode(color: Color) -> Style {
+        Style::default().fg(color).add_modifier(Modifier::BOLD)
     }
 
     #[inline(always)]
@@ -138,27 +134,21 @@ impl Theme {
 
     #[inline(always)]
     pub fn field_selection() -> Style {
-        Style::default()
-            .bg(Color::Rgb(80, 65, 110))
-            .fg(Color::White)
+        Style::default().add_modifier(Modifier::REVERSED)
     }
 
     #[inline(always)]
     pub fn status_message() -> Style {
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD)
+        Style::default().fg(Color::Yellow)
     }
 
     #[inline(always)]
     pub fn shortcut_key() -> Style {
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD)
+        Style::default().add_modifier(Modifier::BOLD)
     }
 
     #[inline(always)]
     pub fn shortcut_desc() -> Style {
-        Style::default().fg(Color::Rgb(180, 185, 200))
+        Style::default().fg(Color::DarkGray)
     }
 }

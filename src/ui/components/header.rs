@@ -1,5 +1,5 @@
 use crate::{
-    app::{App, FocusPane, ViewMode},
+    app::{App, ViewMode},
     sync::SyncStatus,
     ui::theme::Theme,
 };
@@ -8,159 +8,77 @@ use ratatui::{
     layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph},
+    widgets::Paragraph,
 };
 
+/// Breadcrumb on the left (`Hopes / Tasks / All`), completion and sync state on the
+/// right. A hairline rule is drawn on the row below by the layout orchestrator.
 pub fn render(f: &mut Frame, app: &App, area: Rect) {
     let stats = app.stats();
-    let filtered_len = app.get_filtered_indices().len();
 
-    let view_pill = match app.view_mode {
-        ViewMode::Table => Span::styled(
-            " TABLE ",
-            Style::default()
-                .bg(Color::Rgb(30, 60, 90))
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        ViewMode::Kanban => Span::styled(
-            " KANBAN ",
-            Style::default()
-                .bg(Color::Rgb(70, 40, 90))
-                .fg(Color::Magenta)
-                .add_modifier(Modifier::BOLD),
-        ),
+    let section = match app.view_mode {
+        ViewMode::Table => "Tasks",
+        ViewMode::Kanban => "Board",
+    };
+    let current = match &app.tag_filter {
+        Some(tag) => format!("#{}", tag.strip_prefix('#').unwrap_or(tag)),
+        None => app.nav_section.label().to_string(),
     };
 
-    let sort_pill = Span::styled(
-        format!(" SORT: {} ", app.sort_mode.label()),
-        Style::default()
-            .bg(Color::Rgb(40, 45, 55))
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
-    );
-
-    let pane_name = match app.focus_pane {
-        FocusPane::Nav => "NAV",
-        FocusPane::Main => "MAIN",
-        FocusPane::Inspector => "INSPECTOR",
-    };
-    let pane_pill = Span::styled(
-        format!(" FOCUS: {pane_name} "),
-        Style::default().bg(Color::Rgb(35, 45, 50)).fg(Color::White),
-    );
-
-    let sync_badge = match &app.sync_status {
-        SyncStatus::Disabled => None,
-        SyncStatus::Idle => Some(Span::styled(
-            " \u{2601} Idle ",
-            Style::default()
-                .bg(Color::Rgb(40, 45, 55))
-                .fg(Color::DarkGray),
-        )),
-        SyncStatus::Syncing(msg) => Some(Span::styled(
-            format!(" \u{2601} {msg} "),
-            Style::default()
-                .bg(Color::Rgb(60, 55, 20))
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )),
-        SyncStatus::Synced | SyncStatus::UpdatedRemoteData => Some(Span::styled(
-            " \u{2601} Synced ",
-            Style::default()
-                .bg(Color::Rgb(20, 60, 30))
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        )),
-        SyncStatus::Offline => Some(Span::styled(
-            " \u{2601} Offline ",
-            Style::default()
-                .bg(Color::Rgb(45, 45, 45))
-                .fg(Color::DarkGray),
-        )),
-        SyncStatus::Conflict(_) => Some(Span::styled(
-            " \u{2601} Conflict ",
-            Style::default()
-                .bg(Color::Red)
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )),
-        SyncStatus::Error(_) => Some(Span::styled(
-            " \u{2601} Sync Error ",
-            Style::default()
-                .bg(Color::Rgb(90, 20, 20))
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )),
-    };
-
-    let mut left_spans = Vec::with_capacity(11);
-    left_spans.push(Span::styled(" HOPES ", Theme::header_brand()));
-    left_spans.push(Span::raw(" "));
-    left_spans.push(view_pill);
-    left_spans.push(Span::raw(" "));
-    left_spans.push(sort_pill);
-    left_spans.push(Span::raw(" "));
-    left_spans.push(pane_pill);
-
-    if let Some(badge) = sync_badge {
-        left_spans.push(Span::raw(" "));
-        left_spans.push(badge);
-    }
-
-    if let Some(ref filter) = app.tag_filter {
-        left_spans.push(Span::raw(" "));
-        left_spans.push(Span::styled(
-            format!(" FILTER: {filter} ({filtered_len}/{}) ", stats.total),
-            Style::default()
-                .bg(Color::Yellow)
-                .fg(Color::Black)
-                .add_modifier(Modifier::BOLD),
+    let sep = Span::styled(" / ", Theme::muted());
+    let mut left = vec![
+        Span::raw("  "),
+        Span::styled("Hopes", Theme::muted()),
+        sep.clone(),
+        Span::styled(section, Theme::muted()),
+        sep,
+        Span::styled(current, Theme::text_bold()),
+    ];
+    if app.tag_filter.is_some() {
+        let shown = app.get_filtered_indices().len();
+        left.push(Span::styled(
+            format!("  {shown}/{}", stats.total),
+            Theme::muted(),
         ));
     }
 
-    let right_spans = vec![
-        Span::styled("Total: ", Theme::muted()),
-        Span::styled(format!("{:<2} ", stats.total), Theme::text_bold()),
-        Span::styled("Todo: ", Theme::muted()),
-        Span::styled(
-            format!("{:<2} ", stats.todo),
-            Style::default().fg(Color::White),
+    let mut right = vec![Span::styled(
+        format!("{}% done", stats.percent),
+        Theme::muted(),
+    )];
+    if let Some(sync) = sync_span(&app.sync_status) {
+        right.push(Span::raw("   "));
+        right.push(sync);
+    }
+    right.push(Span::raw("  "));
+
+    f.render_widget(
+        Paragraph::new(Line::from(left)).alignment(Alignment::Left),
+        area,
+    );
+    f.render_widget(
+        Paragraph::new(Line::from(right)).alignment(Alignment::Right),
+        area,
+    );
+}
+
+fn sync_span(status: &SyncStatus) -> Option<Span<'static>> {
+    let (text, style) = match status {
+        SyncStatus::Disabled => return None,
+        SyncStatus::Idle => ("Idle".to_string(), Theme::muted()),
+        SyncStatus::Syncing(msg) => (msg.clone(), Style::default().fg(Color::Yellow)),
+        SyncStatus::Synced | SyncStatus::UpdatedRemoteData => {
+            ("Synced".to_string(), Theme::muted())
+        }
+        SyncStatus::Offline => ("Offline".to_string(), Theme::muted()),
+        SyncStatus::Conflict(_) => (
+            "Conflict".to_string(),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("WIP: ", Theme::muted()),
-        Span::styled(
-            format!("{:<2} ", stats.in_progress),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+        SyncStatus::Error(_) => (
+            "Sync error".to_string(),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("Done: ", Theme::muted()),
-        Span::styled(
-            format!("{:<2} ", stats.complete),
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("({}%)", stats.percent),
-            Style::default().fg(Color::Green),
-        ),
-    ];
-
-    let header_line = Line::from(left_spans);
-    let right_line = Line::from(right_spans);
-
-    let header_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Theme::border());
-
-    let inner = header_block.inner(area);
-    f.render_widget(header_block, area);
-
-    let left_para = Paragraph::new(header_line).alignment(Alignment::Left);
-    let right_para = Paragraph::new(right_line).alignment(Alignment::Right);
-
-    f.render_widget(left_para, inner);
-    f.render_widget(right_para, inner);
+    };
+    Some(Span::styled(format!("\u{2601} {text}"), style))
 }

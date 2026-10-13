@@ -48,23 +48,33 @@ impl Priority {
         }
     }
 
+    /// Single-cell glyph that hints at urgency without spelling the level out.
+    #[inline(always)]
+    pub fn glyph(&self) -> &'static str {
+        match self {
+            Self::Urgent | Self::High => "\u{25b2}",
+            Self::Medium => "\u{25c6}",
+            Self::Low => "\u{25bd}",
+        }
+    }
+
     #[inline(always)]
     pub fn label(&self) -> &'static str {
         match self {
-            Self::Urgent => "URGENT",
-            Self::High => "HIGH",
-            Self::Medium => "MEDIUM",
-            Self::Low => "LOW",
+            Self::Urgent => "Urgent",
+            Self::High => "High",
+            Self::Medium => "Medium",
+            Self::Low => "Low",
         }
     }
 
     #[inline(always)]
     pub fn short_label(&self) -> &'static str {
         match self {
-            Self::Urgent => "URG",
-            Self::High => "HIGH",
-            Self::Medium => "MED",
-            Self::Low => "LOW",
+            Self::Urgent => "Urg",
+            Self::High => "High",
+            Self::Medium => "Med",
+            Self::Low => "Low",
         }
     }
 

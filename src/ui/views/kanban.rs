@@ -8,10 +8,10 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph, Wrap},
+    widgets::{Paragraph, Wrap},
 };
 
-pub fn render(f: &mut Frame, app: &App, area: Rect) {
+pub fn draw_kanban(f: &mut Frame, app: &App, area: Rect) {
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -61,36 +61,27 @@ fn render_column(
     let count = indices.len();
 
     let (title_text, title_color) = match status {
-        Status::Todo => (format!(" [ ] TODO ({count}) "), Color::White),
-        Status::InProgress => (format!(" [-] IN PROGRESS ({count}) "), Color::Cyan),
-        Status::Complete => (format!(" [x] COMPLETED ({count}) "), Color::Green),
+        Status::Todo => (format!("To Do \u{b7} {count}"), Color::Reset),
+        Status::InProgress => (format!("In Progress \u{b7} {count}"), Color::Cyan),
+        Status::Complete => (format!("Completed \u{b7} {count}"), Color::Green),
     };
 
-    let border_style = if is_col_active {
-        Theme::border_focused()
-    } else {
-        Theme::border()
-    };
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(border_style)
-        .title(title_text)
-        .title_style(
-            Style::default()
-                .fg(title_color)
-                .add_modifier(Modifier::BOLD),
-        );
+    let block = Theme::pane(
+        title_text,
+        Style::default()
+            .fg(title_color)
+            .add_modifier(Modifier::BOLD),
+        is_col_active,
+    );
 
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     if indices.is_empty() {
         let empty_msg = match status {
-            Status::Todo => "No todo tasks\nPress 'a' to add",
-            Status::InProgress => "No active tasks\nShift with <Space>",
-            Status::Complete => "No done tasks",
+            Status::Todo => "Nothing to do\nPress 'a' to add",
+            Status::InProgress => "Nothing in progress\nPress <Space> to start one",
+            Status::Complete => "Nothing completed yet",
         };
         let p = Paragraph::new(empty_msg)
             .style(Theme::muted())
@@ -106,31 +97,20 @@ fn render_column(
         let item = &app.items[real_idx];
         let is_card_selected = is_col_active && item_pos == selected_cursor;
 
-        let cursor_sym = if is_card_selected { "> " } else { "  " };
+        let cursor_sym = Theme::cursor_prefix(is_card_selected, false);
 
-        let mut card_title_style = if item.status == Status::Complete {
+        let card_title_style = if item.status == Status::Complete {
             Theme::completed()
         } else if is_card_selected {
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD)
+            Theme::text_bold()
         } else {
-            Style::default().fg(Color::White)
+            Style::default()
         };
 
-        if is_card_selected {
-            card_title_style = card_title_style.bg(Color::Rgb(38, 44, 58));
-        }
-
-        let prio_span = Span::styled(
-            format!("[{}] ", item.priority.short_label()),
-            Style::default()
-                .fg(item.priority.color())
-                .add_modifier(Modifier::BOLD),
-        );
+        let prio_span = Theme::priority_marker(item.priority);
 
         lines.push(Line::from(vec![
-            Span::styled(cursor_sym, Style::default().fg(Color::Cyan)),
+            Span::raw(cursor_sym),
             prio_span,
             Span::styled(item.title.as_str(), card_title_style),
         ]));
@@ -159,6 +139,6 @@ fn render_column(
         lines.push(Line::raw(""));
     }
 
-    let p = Paragraph::new(lines).wrap(Wrap { trim: true });
+    let p = Paragraph::new(lines).wrap(Wrap { trim: false });
     f.render_widget(p, inner);
 }

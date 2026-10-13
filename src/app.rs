@@ -139,10 +139,10 @@ impl SortMode {
     #[inline(always)]
     pub fn label(&self) -> &'static str {
         match self {
-            Self::Natural => "NATURAL",
-            Self::Priority => "PRIORITY",
-            Self::Status => "STATUS",
-            Self::Title => "TITLE",
+            Self::Natural => "Natural",
+            Self::Priority => "Priority",
+            Self::Status => "Status",
+            Self::Title => "Title",
         }
     }
 }
@@ -168,11 +168,11 @@ impl NavSection {
     #[inline(always)]
     pub fn label(&self) -> &'static str {
         match self {
-            Self::All => "All Tasks",
-            Self::Todo => "Todo Queue",
+            Self::All => "All",
+            Self::Todo => "To Do",
             Self::InProgress => "In Progress",
             Self::Complete => "Completed",
-            Self::Urgent => "Urgent Only",
+            Self::Urgent => "Urgent",
         }
     }
 }
@@ -1364,7 +1364,7 @@ impl App {
         if cleared {
             self.refresh_cache();
             self.table_state.select(Some(0));
-            self.set_status_message("Filter reset to All Tasks");
+            self.set_status_message("Filter reset to All");
         }
     }
 

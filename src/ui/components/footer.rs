@@ -1,23 +1,25 @@
 use crate::{
-    app::{App, AppMode},
+    app::{App, AppMode, FocusPane},
     ui::theme::Theme,
 };
 use ratatui::{
     Frame,
     layout::{Alignment, Rect},
+    style::Color,
     text::{Line, Span},
     widgets::Paragraph,
 };
 
 pub fn render(f: &mut Frame, app: &App, area: Rect) {
-    let mode_span = match app.mode {
-        AppMode::Normal => Span::styled(" NORMAL ", Theme::mode_normal()),
-        AppMode::Creating => Span::styled(" INSERT ", Theme::mode_insert()),
-        AppMode::Editing => Span::styled(" EDIT ", Theme::mode_edit()),
-        AppMode::Filtering => Span::styled(" FILTER ", Theme::mode_filter()),
-        AppMode::Command => Span::styled(" COMMAND ", Theme::mode_command()),
-        AppMode::Help => Span::styled(" HELP ", Theme::mode_help()),
+    let (mode_label, mode_color) = match app.mode {
+        AppMode::Normal => ("Normal", Color::DarkGray),
+        AppMode::Creating => ("Insert", Color::Cyan),
+        AppMode::Editing => ("Edit", Color::Magenta),
+        AppMode::Filtering => ("Find", Color::Yellow),
+        AppMode::Command => ("Command", Color::Reset),
+        AppMode::Help => ("Help", Color::Blue),
     };
+    let mode_span = Span::styled(format!("  {mode_label}"), Theme::mode(mode_color));
 
     let mut line1_left = vec![mode_span, Span::raw(" ")];
 
@@ -54,50 +56,36 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         Some(i) if total_filtered > 0 => i + 1,
         _ => 0,
     };
-    let percent_pos = (curr_pos * 100usize)
-        .checked_div(total_filtered)
-        .unwrap_or(0);
-
     let line1_right = vec![Span::styled(
-        format!("[ {curr_pos} / {total_filtered} ] ({percent_pos}%) "),
+        format!("{curr_pos} / {total_filtered}  "),
         Theme::muted(),
     )];
 
     let line2_spans = match app.mode {
-        AppMode::Normal => vec![
-            Span::styled("j/k", Theme::shortcut_key()),
-            Span::styled(":Nav ", Theme::shortcut_desc()),
-            Span::styled("Tab", Theme::shortcut_key()),
-            Span::styled(":Pane ", Theme::shortcut_desc()),
-            Span::styled("v", Theme::shortcut_key()),
-            Span::styled(":View ", Theme::shortcut_desc()),
-            Span::styled("s", Theme::shortcut_key()),
-            Span::styled(":Sort ", Theme::shortcut_desc()),
-            Span::styled("Space", Theme::shortcut_key()),
-            Span::styled(":Toggle ", Theme::shortcut_desc()),
-            Span::styled("a/o", Theme::shortcut_key()),
-            Span::styled(":New ", Theme::shortcut_desc()),
-            Span::styled("e", Theme::shortcut_key()),
-            Span::styled(":Edit ", Theme::shortcut_desc()),
-            Span::styled("dd", Theme::shortcut_key()),
-            Span::styled(":Del ", Theme::shortcut_desc()),
-            Span::styled("u", Theme::shortcut_key()),
-            Span::styled(":Undo ", Theme::shortcut_desc()),
-            Span::styled("J/K", Theme::shortcut_key()),
-            Span::styled(":Move ", Theme::shortcut_desc()),
-            Span::styled("/", Theme::shortcut_key()),
-            Span::styled(":Find ", Theme::shortcut_desc()),
-            Span::styled("t", Theme::shortcut_key()),
-            Span::styled(":Tag ", Theme::shortcut_desc()),
-            Span::styled("S", Theme::shortcut_key()),
-            Span::styled(":Sync ", Theme::shortcut_desc()),
-            Span::styled(":", Theme::shortcut_key()),
-            Span::styled(":Cmd ", Theme::shortcut_desc()),
-            Span::styled("?", Theme::shortcut_key()),
-            Span::styled(":Help ", Theme::shortcut_desc()),
-            Span::styled("q", Theme::shortcut_key()),
-            Span::styled(":Quit", Theme::shortcut_desc()),
-        ],
+        AppMode::Normal => {
+            let mut spans = vec![
+                Span::styled("  ? ", Theme::shortcut_key()),
+                Span::styled("help   ", Theme::shortcut_desc()),
+                Span::styled(": ", Theme::shortcut_key()),
+                Span::styled("commands   ", Theme::shortcut_desc()),
+                Span::styled("/ ", Theme::shortcut_key()),
+                Span::styled("find", Theme::shortcut_desc()),
+            ];
+            let context: &[(&str, &str)] = match app.focus_pane {
+                FocusPane::Main => &[("e", "edit"), ("Space", "toggle"), ("dd", "delete")],
+                FocusPane::Nav => &[("Enter", "open"), ("1-5", "jump")],
+                FocusPane::Inspector => &[("j/k", "scroll"), ("Tab", "next pane")],
+            };
+            let context_width: usize = context.iter().map(|(k, d)| k.len() + d.len() + 5).sum();
+            let left_width = Line::from(spans.clone()).width();
+            let pad = (area.width as usize).saturating_sub(left_width + context_width);
+            spans.push(Span::raw(" ".repeat(pad)));
+            for (key, desc) in context {
+                spans.push(Span::styled(format!("[{key}] "), Theme::shortcut_key()));
+                spans.push(Span::styled(format!("{desc}  "), Theme::shortcut_desc()));
+            }
+            spans
+        }
         AppMode::Creating | AppMode::Editing
             if is_text_editing_field && app.field_visual_anchor.is_some() =>
         {

@@ -33,18 +33,18 @@ impl Status {
     #[inline(always)]
     pub fn badge(&self) -> (&'static str, Color) {
         match self {
-            Self::Todo => ("[ ]", Color::DarkGray),
-            Self::InProgress => ("[-]", Color::Cyan),
-            Self::Complete => ("[x]", Color::Green),
+            Self::Todo => ("\u{25cb}", Color::DarkGray),
+            Self::InProgress => ("\u{25d0}", Color::Cyan),
+            Self::Complete => ("\u{2713}", Color::Green),
         }
     }
 
     #[inline(always)]
     pub fn label(&self) -> &'static str {
         match self {
-            Self::Todo => "TODO",
-            Self::InProgress => "IN PROGRESS",
-            Self::Complete => "DONE",
+            Self::Todo => "To Do",
+            Self::InProgress => "In Progress",
+            Self::Complete => "Done",
         }
     }
 

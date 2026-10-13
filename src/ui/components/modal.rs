@@ -8,7 +8,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 
 /// Renders `text` as a `Text`, highlighting the [lo, hi] char range (if any
@@ -16,7 +16,7 @@ use ratatui::{
 /// correctly across embedded `\n`s so multi-line Description selections work
 /// too — Paragraph needs one `Line` per visual row, not one long string.
 fn styled_field_text(text: &str, cursor: usize, visual_anchor: Option<usize>) -> Text<'static> {
-    let base_style = Style::default().fg(Color::White);
+    let base_style = Style::default().fg(Color::Reset);
     let Some(anchor) = visual_anchor else {
         return Text::from(text.to_string()).style(base_style);
     };
@@ -72,12 +72,11 @@ pub fn render_form_modal(f: &mut Frame, app: &App) {
 
     let modal_block = Block::default()
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Cyan))
         .title(modal_title)
         .title_style(
             Style::default()
-                .fg(Color::White)
+                .fg(Color::Reset)
                 .add_modifier(Modifier::BOLD),
         );
 
@@ -110,7 +109,6 @@ pub fn render_form_modal(f: &mut Frame, app: &App) {
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
             .border_style(title_border)
             .title(" Task Title "),
     );
@@ -137,7 +135,6 @@ pub fn render_form_modal(f: &mut Frame, app: &App) {
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
             .border_style(desc_border)
             .title(" Description / Notes "),
     );
@@ -173,7 +170,6 @@ pub fn render_form_modal(f: &mut Frame, app: &App) {
     let priority_widget = Paragraph::new(Line::from(priority_spans)).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
             .border_style(prio_border)
             .title(" Priority [h/l or 1-4] "),
     );
@@ -194,7 +190,6 @@ pub fn render_form_modal(f: &mut Frame, app: &App) {
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
             .border_style(tags_border)
             .title(" Tags (comma-separated, e.g. rust, cli) "),
     );
@@ -229,7 +224,6 @@ pub fn render_filter_modal(f: &mut Frame, app: &App) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Yellow))
         .title(format!(
             " LIVE SEARCH / FILTER [{matching}/{total} MATCHES] "
@@ -285,12 +279,11 @@ pub fn render_command_modal(f: &mut Frame, app: &App) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::White))
+        .border_style(Style::default().fg(Color::Reset))
         .title(" COMMAND ")
         .title_style(
             Style::default()
-                .fg(Color::White)
+                .fg(Color::Reset)
                 .add_modifier(Modifier::BOLD),
         );
 
@@ -300,7 +293,7 @@ pub fn render_command_modal(f: &mut Frame, app: &App) {
     let mut input_spans = vec![Span::styled(
         ": ",
         Style::default()
-            .fg(Color::White)
+            .fg(Color::Reset)
             .add_modifier(Modifier::BOLD),
     )];
     let text = styled_field_text(&app.command_input, app.text_cursor, app.field_visual_anchor);
@@ -336,12 +329,11 @@ pub fn render_help_modal(f: &mut Frame) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Cyan))
         .title(" KEYBOARD SHORTCUTS & VIM MOTIONS ")
         .title_style(
             Style::default()
-                .fg(Color::White)
+                .fg(Color::Reset)
                 .add_modifier(Modifier::BOLD),
         );
 
