@@ -228,6 +228,8 @@ pub struct App {
     pub field_clipboard: String,
 
     pub inspector_scroll: u16,
+    /// First visible line of the help popup.
+    pub help_scroll: u16,
 
     pub pending_g: bool,
     pub pending_d: bool,
@@ -306,6 +308,7 @@ impl App {
             field_visual_anchor: None,
             field_clipboard: String::new(),
             inspector_scroll: 0,
+            help_scroll: 0,
             pending_g: false,
             pending_d: false,
             last_deleted: None,

@@ -10,7 +10,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-pub fn render(f: &mut Frame, app: &App, area: Rect) {
+pub fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let (mode_label, mode_color) = match app.mode {
         AppMode::Normal => ("Normal", Color::DarkGray),
         AppMode::Creating => ("Insert", Color::Cyan),

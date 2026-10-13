@@ -385,7 +385,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     | KeyCode::Char('q')
                     | KeyCode::Enter
                     | KeyCode::Char(' ') => {
+                        app.help_scroll = 0;
                         app.mode = AppMode::Normal;
+                    }
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        let max = terminal
+                            .size()
+                            .map(|s| ui::components::modal::help_max_scroll(s.height))
+                            .unwrap_or(0);
+                        app.help_scroll = (app.help_scroll + 1).min(max);
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        app.help_scroll = app.help_scroll.saturating_sub(1);
                     }
                     _ => {}
                 },

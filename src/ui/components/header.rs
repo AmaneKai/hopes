@@ -13,7 +13,7 @@ use ratatui::{
 
 /// Breadcrumb on the left (`Hopes / Tasks / All`), completion and sync state on the
 /// right. A hairline rule is drawn on the row below by the layout orchestrator.
-pub fn render(f: &mut Frame, app: &App, area: Rect) {
+pub fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let stats = app.stats();
 
     let section = match app.view_mode {

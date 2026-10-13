@@ -3,7 +3,7 @@ pub mod panes;
 pub mod theme;
 pub mod views;
 
-use crate::app::{App, AppMode, ViewMode};
+use crate::app::{App, ViewMode};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -29,18 +29,12 @@ pub fn render(f: &mut Frame, app: &mut App) {
         ])
         .split(f.area());
 
-    components::header::render(f, app, chunks[0]);
+    components::header::draw_header(f, app, chunks[0]);
     draw_rule(f, chunks[1]);
     draw_body(f, app, chunks[2]);
-    components::footer::render(f, app, chunks[3]);
+    components::footer::draw_footer(f, app, chunks[3]);
 
-    match app.mode {
-        AppMode::Creating | AppMode::Editing => components::modal::render_form_modal(f, app),
-        AppMode::Filtering => components::modal::render_filter_modal(f, app),
-        AppMode::Command => components::modal::render_command_modal(f, app),
-        AppMode::Help => components::modal::render_help_modal(f),
-        AppMode::Normal => {}
-    }
+    components::modal::draw_modal(f, app, f.area());
 }
 
 fn draw_body(f: &mut Frame, app: &mut App, body: Rect) {
