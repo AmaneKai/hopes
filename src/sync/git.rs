@@ -72,6 +72,30 @@ fn is_offline_stderr(stderr: &str) -> bool {
         || s.contains("no route to host")
 }
 
+/// True if `items.json` has uncommitted edits or local commits the remote lacks.
+/// Any git failure (no upstream yet, offline) reads as "nothing to do".
+pub fn has_unsynced_changes(dir: &Path, remote: &str, branch: &str) -> bool {
+    let dirty = run(dir, &["status", "--porcelain", "--", "items.json"])
+        .map(|o| !o.stdout.is_empty())
+        .unwrap_or(false);
+    if dirty {
+        return true;
+    }
+    run(
+        dir,
+        &["rev-list", "--count", &format!("{remote}/{branch}..HEAD")],
+    )
+    .ok()
+    .filter(|o| o.status.success())
+    .and_then(|o| {
+        String::from_utf8_lossy(&o.stdout)
+            .trim()
+            .parse::<u32>()
+            .ok()
+    })
+    .is_some_and(|n| n > 0)
+}
+
 pub fn pull_rebase(dir: &Path, remote: &str, branch: &str) -> Result<(), GitError> {
     let output = run(dir, &["pull", "--rebase", "--autostash", remote, branch])?;
     if output.status.success() {
@@ -183,6 +207,23 @@ mod tests {
         assert!(!is_repo(&dir));
         run(&dir, &["init", "-b", "main"]).unwrap();
         assert!(is_repo(&dir));
+    }
+
+    #[test]
+    fn detects_uncommitted_and_unpushed_changes() {
+        let remote = make_bare_remote_with_items("[]");
+        let workdir = scratch_dir("unsynced");
+        init_clone(&workdir, &remote);
+        assert!(!has_unsynced_changes(&workdir, "origin", "main"));
+
+        fs::write(workdir.join("items.json"), "[{\"title\":\"a\"}]").unwrap();
+        assert!(has_unsynced_changes(&workdir, "origin", "main"));
+
+        stage_and_commit(&workdir, "sync: update tasks").unwrap();
+        assert!(has_unsynced_changes(&workdir, "origin", "main"));
+
+        push(&workdir, "origin", "main").unwrap();
+        assert!(!has_unsynced_changes(&workdir, "origin", "main"));
     }
 
     #[test]

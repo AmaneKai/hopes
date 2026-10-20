@@ -59,6 +59,12 @@ impl Theme {
         }
     }
 
+    /// Solid background that anchors the footer's status line.
+    #[inline(always)]
+    pub fn status_bar() -> Style {
+        Style::default().bg(Color::Indexed(236))
+    }
+
     #[inline(always)]
     pub fn border() -> Style {
         Style::default().fg(Color::DarkGray)

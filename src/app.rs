@@ -540,7 +540,7 @@ impl App {
     }
 
     pub fn shutdown_sync(&mut self) {
-        self.sync_engine.shutdown(Duration::from_secs(3));
+        self.sync_engine.shutdown();
     }
 
     pub fn enter_command_mode(&mut self) {

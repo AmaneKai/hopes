@@ -1,11 +1,18 @@
 pub mod git;
 
 use std::{
+    cell::Cell,
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     sync::mpsc::{self, Receiver, RecvTimeoutError, Sender},
-    thread::{self, JoinHandle},
+    thread,
     time::{Duration, Instant},
 };
+
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 #[derive(Debug)]
 pub enum SyncRequest {
@@ -29,7 +36,10 @@ pub enum SyncStatus {
 pub struct SyncEngine {
     tx: Sender<SyncRequest>,
     rx: Receiver<SyncStatus>,
-    handle: Option<JoinHandle<()>>,
+    data_dir: PathBuf,
+    remote: String,
+    branch: String,
+    dirty: Cell<bool>,
     pub enabled: bool,
 }
 
@@ -44,18 +54,23 @@ impl SyncEngine {
     ) -> Self {
         let (req_tx, req_rx) = mpsc::channel::<SyncRequest>();
         let (status_tx, status_rx) = mpsc::channel::<SyncStatus>();
+        let (engine_dir, engine_remote, engine_branch) =
+            (data_dir.clone(), remote.clone(), branch.clone());
 
         if !enabled || !git::is_repo(&data_dir) {
             let _ = status_tx.send(SyncStatus::Disabled);
             return Self {
                 tx: req_tx,
                 rx: status_rx,
-                handle: None,
+                data_dir: engine_dir,
+                remote: engine_remote,
+                branch: engine_branch,
+                dirty: Cell::new(false),
                 enabled: false,
             };
         }
 
-        let handle = thread::spawn(move || {
+        thread::spawn(move || {
             worker_loop(
                 data_dir,
                 remote,
@@ -70,7 +85,10 @@ impl SyncEngine {
         Self {
             tx: req_tx,
             rx: status_rx,
-            handle: Some(handle),
+            data_dir: engine_dir,
+            remote: engine_remote,
+            branch: engine_branch,
+            dirty: Cell::new(false),
             enabled: true,
         }
     }
@@ -78,6 +96,7 @@ impl SyncEngine {
     #[inline(always)]
     pub fn request_push(&self) {
         if self.enabled {
+            self.dirty.set(true);
             let _ = self.tx.send(SyncRequest::SchedulePush);
         }
     }
@@ -91,23 +110,56 @@ impl SyncEngine {
 
     #[inline(always)]
     pub fn try_recv(&self) -> Option<SyncStatus> {
-        self.rx.try_recv().ok()
+        let status = self.rx.try_recv().ok();
+        if status == Some(SyncStatus::Synced) {
+            self.dirty.set(false);
+        }
+        status
     }
 
-    /// Best-effort flush: asks the worker to push any pending commit and waits
-    /// briefly for it, but never blocks the app from exiting.
-    pub fn shutdown(&mut self, wait: Duration) {
+    /// Hands any unsynced changes to a detached copy of this binary (see
+    /// [`flush`]) so the app can exit immediately while the push finishes in
+    /// the background. Anything that still fails (offline) is picked up by the
+    /// startup check in `worker_loop` next time.
+    pub fn shutdown(&mut self) {
         if !self.enabled {
             return;
         }
         let _ = self.tx.send(SyncRequest::Shutdown);
-        if let Some(handle) = &self.handle {
-            let start = Instant::now();
-            while !handle.is_finished() && start.elapsed() < wait {
-                thread::sleep(Duration::from_millis(50));
-            }
+        if !self.dirty.get() {
+            return;
         }
+        let Ok(exe) = std::env::current_exe() else {
+            return;
+        };
+        let mut cmd = Command::new(exe);
+        cmd.arg(FLUSH_ARG)
+            .arg(&self.data_dir)
+            .arg(&self.remote)
+            .arg(&self.branch)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        #[cfg(unix)]
+        cmd.process_group(0);
+        #[cfg(windows)]
+        {
+            const DETACHED_PROCESS: u32 = 0x0000_0008;
+            const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+            cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+        }
+        let _ = cmd.spawn();
     }
+}
+
+/// Hidden first argument that turns the binary into the detached quit-time pusher.
+pub const FLUSH_ARG: &str = "--sync-flush";
+
+/// Entry point of the detached pusher: one commit + push (pulling and
+/// resolving conflicts like the in-app worker does), then exit.
+pub fn flush(dir: &Path, remote: &str, branch: &str) {
+    let (tx, _rx) = mpsc::channel::<SyncStatus>();
+    do_push(dir, remote, branch, &tx);
 }
 
 fn do_pull(dir: &Path, remote: &str, branch: &str, tx: &Sender<SyncStatus>) {
@@ -211,7 +263,12 @@ fn worker_loop(
         let _ = tx.send(SyncStatus::Idle);
     }
 
-    let mut pending_since: Option<Instant> = None;
+    // Recover anything a previous run couldn't push (offline at quit, crash).
+    let mut pending_since: Option<Instant> = git::has_unsynced_changes(&data_dir, &remote, &branch)
+        .then(|| {
+            let _ = tx.send(SyncStatus::Syncing("Pending sync...".into()));
+            Instant::now()
+        });
 
     loop {
         match rx.recv_timeout(Duration::from_millis(100)) {
@@ -223,12 +280,7 @@ fn worker_loop(
                 let retry = do_push(&data_dir, &remote, &branch, &tx);
                 pending_since = retry.then(Instant::now);
             }
-            Ok(SyncRequest::Shutdown) => {
-                if pending_since.is_some() {
-                    do_push(&data_dir, &remote, &branch, &tx);
-                }
-                break;
-            }
+            Ok(SyncRequest::Shutdown) => break,
             Err(RecvTimeoutError::Timeout) => {
                 if let Some(started) = pending_since
                     && started.elapsed() >= debounce
@@ -335,6 +387,40 @@ mod tests {
         git(&verify, &["clone", remote.to_str().unwrap(), "."]);
         let contents = fs::read_to_string(verify.join("items.json")).unwrap();
         assert_eq!(contents, "[{\"title\":\"edit-4\"}]");
+    }
+
+    #[test]
+    fn flush_pushes_uncommitted_edits() {
+        let (workdir, remote) = setup_repo();
+        let before = commit_count(&remote, "main");
+
+        fs::write(workdir.join("items.json"), "[{\"title\":\"quit-time\"}]").unwrap();
+        flush(&workdir, "origin", "main");
+
+        assert_eq!(commit_count(&remote, "main"), before + 1);
+    }
+
+    #[test]
+    fn engine_pushes_leftover_changes_on_startup() {
+        let (workdir, remote) = setup_repo();
+        let before = commit_count(&remote, "main");
+
+        // Simulates a quit-time push that never made it out.
+        fs::write(workdir.join("items.json"), "[{\"title\":\"left-behind\"}]").unwrap();
+        let _engine = SyncEngine::spawn(
+            workdir,
+            "origin".into(),
+            "main".into(),
+            Duration::from_millis(100),
+            false,
+            true,
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while commit_count(&remote, "main") == before {
+            assert!(Instant::now() < deadline, "leftover change never pushed");
+            thread::sleep(Duration::from_millis(50));
+        }
     }
 
     #[test]

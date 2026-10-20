@@ -8,11 +8,7 @@ use ratatui::{
 /// Visual-mode selection is active) with `Theme::field_selection()`. Splits
 /// correctly across embedded `\n`s so multi-line Description selections work
 /// too — Paragraph needs one `Line` per visual row, not one long string.
-pub(super) fn styled_field_text(
-    text: &str,
-    cursor: usize,
-    visual_anchor: Option<usize>,
-) -> Text<'static> {
+pub fn styled_field_text(text: &str, cursor: usize, visual_anchor: Option<usize>) -> Text<'static> {
     let base_style = Style::default().fg(Color::Reset);
     let Some(anchor) = visual_anchor else {
         return Text::from(text.to_string()).style(base_style);

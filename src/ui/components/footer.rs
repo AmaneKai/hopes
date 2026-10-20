@@ -1,5 +1,6 @@
 use crate::{
     app::{App, AppMode, FocusPane},
+    ui::components::modal::styled_field_text,
     ui::theme::Theme,
 };
 use ratatui::{
@@ -12,12 +13,12 @@ use ratatui::{
 
 pub fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let (mode_label, mode_color) = match app.mode {
-        AppMode::Normal => ("Normal", Color::DarkGray),
-        AppMode::Creating => ("Insert", Color::Cyan),
-        AppMode::Editing => ("Edit", Color::Magenta),
-        AppMode::Filtering => ("Find", Color::Yellow),
-        AppMode::Command => ("Command", Color::Reset),
-        AppMode::Help => ("Help", Color::Blue),
+        AppMode::Normal => ("NORMAL", Color::Gray),
+        AppMode::Creating => ("INSERT", Color::Cyan),
+        AppMode::Editing => ("EDIT", Color::Magenta),
+        AppMode::Filtering => ("FIND", Color::Yellow),
+        AppMode::Command => ("COMMAND", Color::Reset),
+        AppMode::Help => ("HELP", Color::Blue),
     };
     let mode_span = Span::styled(format!("  {mode_label}"), Theme::mode(mode_color));
 
@@ -62,6 +63,19 @@ pub fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     )];
 
     let line2_spans = match app.mode {
+        AppMode::Command | AppMode::Filtering => {
+            let (prefix, input) = if app.mode == AppMode::Command {
+                (":", &app.command_input)
+            } else {
+                ("/", &app.filter_input)
+            };
+            let mut spans = vec![Span::raw(prefix)];
+            let text = styled_field_text(input, app.text_cursor, app.field_visual_anchor);
+            if let Some(line) = text.lines.into_iter().next() {
+                spans.extend(line.spans);
+            }
+            spans
+        }
         AppMode::Normal => {
             let mut spans = vec![
                 Span::styled("  ? ", Theme::shortcut_key()),
@@ -132,48 +146,19 @@ pub fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             Span::styled("<Esc>", Theme::shortcut_key()),
             Span::styled(":Normal Mode / Cancel", Theme::shortcut_desc()),
         ],
-        AppMode::Filtering if !app.field_insert => vec![
-            Span::styled("h/j/k/l/w/b/e", Theme::shortcut_key()),
-            Span::styled(":Motions ", Theme::shortcut_desc()),
-            Span::styled("x/dd/D", Theme::shortcut_key()),
-            Span::styled(":Delete ", Theme::shortcut_desc()),
-            Span::styled("i/a/I/A", Theme::shortcut_key()),
-            Span::styled(":Insert ", Theme::shortcut_desc()),
-            Span::styled("<Enter>", Theme::shortcut_key()),
-            Span::styled(":Apply ", Theme::shortcut_desc()),
-            Span::styled("<Esc>", Theme::shortcut_key()),
-            Span::styled(":Cancel", Theme::shortcut_desc()),
-        ],
-        AppMode::Filtering => vec![
-            Span::styled("<Enter>", Theme::shortcut_key()),
-            Span::styled(":Apply ", Theme::shortcut_desc()),
-            Span::styled("<Esc>", Theme::shortcut_key()),
-            Span::styled(":Normal Mode / Clear ", Theme::shortcut_desc()),
-            Span::styled("<C-u>", Theme::shortcut_key()),
-            Span::styled(":Clear Input", Theme::shortcut_desc()),
-        ],
-        AppMode::Command => vec![
-            Span::styled("sync", Theme::shortcut_key()),
-            Span::styled(":Force Sync ", Theme::shortcut_desc()),
-            Span::styled("q / quit", Theme::shortcut_key()),
-            Span::styled(":Exit ", Theme::shortcut_desc()),
-            Span::styled("w", Theme::shortcut_key()),
-            Span::styled(":Save (auto) ", Theme::shortcut_desc()),
-            Span::styled("help", Theme::shortcut_key()),
-            Span::styled(":Cheatsheet ", Theme::shortcut_desc()),
-            Span::styled("<Enter>", Theme::shortcut_key()),
-            Span::styled(":Run ", Theme::shortcut_desc()),
-            Span::styled("<Esc>", Theme::shortcut_key()),
-            Span::styled(":Cancel", Theme::shortcut_desc()),
-        ],
         AppMode::Help => vec![
             Span::styled("<Esc> / ? / q / <Enter>", Theme::shortcut_key()),
             Span::styled(":Close Cheatsheet", Theme::shortcut_desc()),
         ],
     };
 
-    let p1_left = Paragraph::new(Line::from(line1_left)).alignment(Alignment::Left);
-    let p1_right = Paragraph::new(Line::from(line1_right)).alignment(Alignment::Right);
+    let bar = Theme::status_bar();
+    let p1_left = Paragraph::new(Line::from(line1_left))
+        .style(bar)
+        .alignment(Alignment::Left);
+    let p1_right = Paragraph::new(Line::from(line1_right))
+        .style(bar)
+        .alignment(Alignment::Right);
     let p2 = Paragraph::new(Line::from(line2_spans)).alignment(Alignment::Left);
 
     if area.height >= 2 {
@@ -192,6 +177,10 @@ pub fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         f.render_widget(p1_left, r1);
         f.render_widget(p1_right, r1);
         f.render_widget(p2, r2);
+        if matches!(app.mode, AppMode::Command | AppMode::Filtering) {
+            let max_x = r2.x + r2.width.saturating_sub(1);
+            f.set_cursor_position(((r2.x + 1 + app.text_cursor as u16).min(max_x), r2.y));
+        }
     } else {
         f.render_widget(p1_left, area);
         f.render_widget(p1_right, area);

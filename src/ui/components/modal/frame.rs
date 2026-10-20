@@ -11,11 +11,7 @@ use ratatui::{
 pub enum Anchor {
     /// Vertically centered: heavier context switches (form, help).
     Center,
-    /// Dropped a few rows from the top: quick palettes (find, command).
-    Top,
 }
-
-const TOP_MARGIN: u16 = 3;
 
 /// Clears a `width` x `height` region (clamped to `area`), draws the rounded popup
 /// frame with `title`, and returns the padded inner rect for the content.
@@ -33,7 +29,6 @@ pub fn popup_frame(
     let x = area.x + (area.width - width) / 2;
     let y = match anchor {
         Anchor::Center => area.y + (area.height - height) / 2,
-        Anchor::Top => area.y + TOP_MARGIN.min(area.height.saturating_sub(height)),
     };
     let rect = Rect::new(x, y, width, height);
 
