@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, c-port]
   pull_request:
-    branches: [main, master]
+    branches: [main, master, c-port]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -12,24 +12,22 @@ concurrency:
 
 jobs:
   lint:
-    name: Lint & Format
+    name: Lint & Warnings
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libncurses-dev
 
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+      - name: Style rules (no comments, max nesting)
+        run: make lint
 
-      - name: Format Check
-        run: cargo fmt --check
+      - name: Warnings as errors (gcc)
+        run: make strict
 
-      - name: Clippy Check
-        run: cargo clippy --all-targets -- -D warnings
+      - name: Warnings as errors (clang)
+        run: make CC=clang strict
 
   test:
     name: Test (${{ matrix.os }})
@@ -38,15 +36,52 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libncurses-dev libsqlite3-dev tmux
 
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install tmux
 
-      - name: Run Tests
-        run: cargo test --all-targets
+      - name: Unit tests (ASan, UBSan, LeakSanitizer on Linux)
+        run: make test
+
+      - name: Sqlite backend tests
+        if: runner.os == 'Linux'
+        run: make SQLITE=1 test
+
+      - name: Binary size budget
+        run: make size
+
+      - name: Two-device git sync
+        run: make sync-test
+
+  windows:
+    name: Build (windows-latest)
+    needs: lint
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            make
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-pdcurses
+
+      - name: Build
+        run: make
+
+      - name: Smoke test
+        run: ./build/hopes.exe --version
