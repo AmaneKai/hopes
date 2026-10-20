@@ -14,6 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let result = app.run(&mut terminal);
 
     tui::restore()?;
+    app.save_view_state();
     app.shutdown_sync();
     result?;
     Ok(())

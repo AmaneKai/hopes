@@ -9,6 +9,7 @@ pub use priority::Priority;
 pub use status::Status;
 
 use crate::systems::sync::SyncStatus;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     time::{Duration, Instant},
@@ -44,7 +45,7 @@ fn contains_ignore_case(haystack: &str, needle: &str) -> bool {
     haystack.to_lowercase().contains(&needle.to_lowercase())
 }
 
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum ViewMode {
     Table,
     Kanban,
@@ -77,7 +78,7 @@ impl FocusPane {
     }
 }
 
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum SortMode {
     Natural,
     Priority,
@@ -107,7 +108,7 @@ impl SortMode {
     }
 }
 
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum NavSection {
     All,
     Todo,

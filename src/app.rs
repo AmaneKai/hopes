@@ -6,6 +6,7 @@ use crate::{
     systems::{
         storage::{self, Storage},
         sync::{SyncEngine, SyncStatus},
+        view_state::ViewState,
     },
     tui::Tui,
     ui::{
@@ -85,7 +86,16 @@ impl App {
             config.sync.pull_on_startup,
             config.sync.enabled && config.storage.backend == Backend::Json,
         );
-        Self::with_store(store, sync_engine)
+        let mut app = Self::with_store(store, sync_engine);
+        if let Some(view) = ViewState::load() {
+            view.apply(&mut app.state);
+            app.nav.restore(&app.state);
+        }
+        app
+    }
+
+    pub fn save_view_state(&self) {
+        ViewState::capture(&self.state).save();
     }
 
     pub fn with_store(store: Box<dyn Storage>, sync_engine: SyncEngine) -> Self {

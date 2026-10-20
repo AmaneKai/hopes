@@ -8,6 +8,7 @@ use crate::{
         text_input::TextInput,
         theme::Theme,
     },
+    utils::textedit,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
@@ -20,7 +21,7 @@ use ratatui::{
 
 const LABEL_WIDTH: u16 = 10;
 const NOTES_ROWS: u16 = 3;
-const FORM_HEIGHT: u16 = 14;
+const FORM_HEIGHT: u16 = 15;
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum FormField {
@@ -58,6 +59,7 @@ pub struct EditorComponent {
     tags: String,
     priority: Priority,
     field: FormField,
+    tag_sel: Option<usize>,
     edit_idx: Option<usize>,
     create_status: Status,
     input: TextInput,
@@ -71,6 +73,7 @@ impl Default for EditorComponent {
             tags: String::new(),
             priority: Priority::Medium,
             field: FormField::Title,
+            tag_sel: None,
             edit_idx: None,
             create_status: Status::Todo,
             input: TextInput::default(),
@@ -118,8 +121,56 @@ impl EditorComponent {
     }
 
     fn focus_field(&mut self) {
+        self.tag_sel = None;
         let (input, buf) = self.input_and_buf();
         input.focus(buf.map(|b| b.as_str()).unwrap_or(""));
+    }
+
+    /// Existing tags matching the token being typed, most used first.
+    /// Empty unless the caret sits at the end of an insert-mode Tags field.
+    fn suggestions(&self, state: &AppState) -> Vec<String> {
+        if self.field != FormField::Tags
+            || !self.input.insert
+            || self.input.cursor != textedit::char_len(&self.tags)
+        {
+            return Vec::new();
+        }
+        let (head, token) = split_tags(&self.tags);
+        let token = token.to_lowercase();
+        let used: Vec<String> = head
+            .split(',')
+            .map(|t| t.trim().to_lowercase())
+            .filter(|t| !t.is_empty())
+            .collect();
+        let candidates = state.tags().iter().map(|(t, _)| t).filter(|t| {
+            let lower = t.to_lowercase();
+            lower != token && !used.contains(&lower)
+        });
+        let (mut hits, rest): (Vec<_>, Vec<_>) =
+            candidates.partition(|t| t.to_lowercase().starts_with(&token));
+        hits.extend(
+            rest.into_iter()
+                .filter(|t| t.to_lowercase().contains(&token)),
+        );
+        hits.into_iter().cloned().collect()
+    }
+
+    /// Index Tab would complete: the picked chip, else the best match for typed text.
+    fn tag_target(&self) -> Option<usize> {
+        self.tag_sel
+            .or_else(|| (!split_tags(&self.tags).1.is_empty()).then_some(0))
+    }
+
+    fn accept_tag(&mut self, tag: &str) {
+        let mut text = match self.tags.rfind(',') {
+            Some(i) => format!("{} ", &self.tags[..=i]),
+            None => String::new(),
+        };
+        text.push_str(tag);
+        text.push_str(", ");
+        self.input.cursor = textedit::char_len(&text);
+        self.tags = text;
+        self.tag_sel = None;
     }
 
     fn handle_priority_key(&mut self, code: KeyCode) {
@@ -159,7 +210,7 @@ impl EditorComponent {
 }
 
 impl Component for EditorComponent {
-    fn handle_key(&mut self, key: KeyEvent, _state: &AppState) -> KeyResult {
+    fn handle_key(&mut self, key: KeyEvent, state: &AppState) -> KeyResult {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let code = key.code;
 
@@ -179,6 +230,33 @@ impl Component for EditorComponent {
             } else {
                 KeyResult::Emit(Action::CloseModal)
             };
+        }
+
+        let suggestions = self.suggestions(state);
+        if !suggestions.is_empty() {
+            let n = suggestions.len();
+            match code {
+                KeyCode::Down => {
+                    self.tag_sel = Some(self.tag_sel.map_or(0, |i| (i + 1) % n));
+                    return KeyResult::Handled;
+                }
+                KeyCode::Up => {
+                    self.tag_sel = Some(self.tag_sel.map_or(n - 1, |i| (i + n - 1) % n));
+                    return KeyResult::Handled;
+                }
+                KeyCode::Tab | KeyCode::Enter => {
+                    let pick = if code == KeyCode::Enter {
+                        self.tag_sel
+                    } else {
+                        self.tag_target()
+                    };
+                    if let Some(tag) = pick.and_then(|i| suggestions.get(i)) {
+                        self.accept_tag(tag);
+                        return KeyResult::Handled;
+                    }
+                }
+                _ => {}
+            }
         }
 
         if (code == KeyCode::Enter && self.field != FormField::Description)
@@ -210,6 +288,7 @@ impl Component for EditorComponent {
         match self.field {
             FormField::Title | FormField::Description | FormField::Tags => {
                 let allow_newline = self.field == FormField::Description;
+                self.tag_sel = None;
                 let (input, buf) = self.input_and_buf();
                 if let Some(buf) = buf {
                     input.handle_key(buf, code, ctrl, allow_newline);
@@ -228,7 +307,7 @@ impl Component for EditorComponent {
         }
     }
 
-    fn render(&mut self, f: &mut Frame, area: Rect, _state: &AppState, _focused: bool) {
+    fn render(&mut self, f: &mut Frame, area: Rect, state: &AppState, _focused: bool) {
         let title = if self.edit_idx.is_some() {
             "Edit task"
         } else {
@@ -245,6 +324,7 @@ impl Component for EditorComponent {
             _,
             prio_row,
             tags_row,
+            chips_row,
             _,
             hint_row,
         ] = Layout::vertical([
@@ -252,6 +332,7 @@ impl Component for EditorComponent {
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(NOTES_ROWS),
+            Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
@@ -337,11 +418,47 @@ impl Component for EditorComponent {
             f.set_cursor_position((x, v.y));
         }
 
+        let suggestions = self.suggestions(state);
+        if !suggestions.is_empty() {
+            let (_, _, v) = split_row(chips_row);
+            let target = self.tag_target();
+            let mut spans = Vec::with_capacity(suggestions.len() * 2);
+            let mut used = 0usize;
+            for (i, tag) in suggestions.iter().enumerate() {
+                let w = tag.chars().count() + 4;
+                if i > 0 && used + w + 4 > v.width as usize {
+                    spans.push(Span::styled(
+                        format!("+{}", suggestions.len() - i),
+                        Theme::muted(),
+                    ));
+                    break;
+                }
+                used += w;
+                let style = if Some(i) == target {
+                    Theme::tag().add_modifier(Modifier::REVERSED)
+                } else {
+                    Theme::tag()
+                };
+                spans.push(Span::styled(format!(" #{tag} "), style));
+                spans.push(Span::raw(" "));
+            }
+            f.render_widget(Paragraph::new(Line::from(spans)), v);
+        }
+
+        let picking = !suggestions.is_empty();
         let hint = Line::from(vec![
             Span::styled("[Ctrl-s] ", Theme::shortcut_key()),
             Span::styled("save   ", Theme::shortcut_desc()),
             Span::styled("[Tab] ", Theme::shortcut_key()),
-            Span::styled("next   ", Theme::shortcut_desc()),
+            Span::styled(
+                if picking { "complete   " } else { "next   " },
+                Theme::shortcut_desc(),
+            ),
+            Span::styled(
+                if picking { "[\u{2191}\u{2193}] " } else { "" },
+                Theme::shortcut_key(),
+            ),
+            Span::styled(if picking { "pick   " } else { "" }, Theme::shortcut_desc()),
             Span::styled("[Esc] ", Theme::shortcut_key()),
             Span::styled("cancel", Theme::shortcut_desc()),
         ]);
@@ -383,4 +500,12 @@ fn split_row(row: Rect) -> (Rect, Rect, Rect) {
     ])
     .areas(row);
     (g, l, v)
+}
+
+/// Splits the tags buffer into the finished part (through the last comma) and the token being typed.
+fn split_tags(tags: &str) -> (&str, &str) {
+    match tags.rfind(',') {
+        Some(i) => (&tags[..i], tags[i + 1..].trim()),
+        None => ("", tags.trim()),
+    }
 }

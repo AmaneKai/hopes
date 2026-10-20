@@ -176,3 +176,76 @@ fn ctrl_c_cancels_from_any_field() {
         KeyResult::Emit(Action::CloseModal)
     ));
 }
+
+fn tagged_state() -> AppState {
+    let mk = |tags: &[&str]| {
+        Item::new(
+            "t".to_string(),
+            tags.iter().map(|t| t.to_string()).collect(),
+        )
+    };
+    state_with(vec![
+        mk(&["project", "ui"]),
+        mk(&["project", "backend"]),
+        mk(&["design"]),
+    ])
+}
+
+fn at_tags(state: &AppState) -> EditorComponent {
+    let mut editor = opened(state, Status::Todo);
+    type_str(&mut editor, state, "title");
+    for _ in 0..3 {
+        editor.handle_key(key(KeyCode::Tab), state);
+    }
+    editor
+}
+
+fn saved_tags(editor: &mut EditorComponent, state: &AppState) -> Vec<String> {
+    let KeyResult::Emit(Action::SaveTask(draft)) = editor.handle_key(key(KeyCode::Enter), state)
+    else {
+        panic!("expected SaveTask");
+    };
+    draft.tags
+}
+
+#[test]
+fn tab_completes_the_typed_tag_prefix() {
+    let state = tagged_state();
+    let mut editor = at_tags(&state);
+    type_str(&mut editor, &state, "pro");
+    editor.handle_key(key(KeyCode::Tab), &state);
+    type_str(&mut editor, &state, "de");
+    editor.handle_key(key(KeyCode::Tab), &state);
+    assert_eq!(saved_tags(&mut editor, &state), vec!["project", "design"]);
+}
+
+#[test]
+fn arrows_pick_a_tag_and_enter_accepts_it_without_saving() {
+    let state = tagged_state();
+    let mut editor = at_tags(&state);
+    editor.handle_key(key(KeyCode::Down), &state);
+    editor.handle_key(key(KeyCode::Down), &state);
+    assert!(is_handled(&editor.handle_key(key(KeyCode::Enter), &state)));
+    assert_eq!(saved_tags(&mut editor, &state), vec!["backend"]);
+}
+
+#[test]
+fn tab_with_nothing_typed_still_moves_to_the_next_field() {
+    let state = tagged_state();
+    let mut editor = at_tags(&state);
+    editor.handle_key(key(KeyCode::Tab), &state);
+    assert!(saved_tags_is_empty(&mut editor, &state));
+}
+
+fn saved_tags_is_empty(editor: &mut EditorComponent, state: &AppState) -> bool {
+    saved_tags(editor, state).is_empty()
+}
+
+#[test]
+fn already_used_tags_are_not_suggested_again() {
+    let state = tagged_state();
+    let mut editor = at_tags(&state);
+    type_str(&mut editor, &state, "project, pro");
+    editor.handle_key(key(KeyCode::Tab), &state);
+    assert_eq!(saved_tags(&mut editor, &state), vec!["project", "pro"]);
+}
