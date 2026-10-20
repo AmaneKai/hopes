@@ -1,3 +1,9 @@
+pub mod cmdline;
+pub mod editor;
 pub mod footer;
 pub mod header;
-pub mod modal;
+pub mod help;
+pub mod inspector;
+pub mod kanban;
+pub mod nav;
+pub mod table;

@@ -1,6 +1,6 @@
 use crate::{
-    app::{App, ViewMode},
-    sync::SyncStatus,
+    domain::{AppState, ViewMode},
+    systems::sync::SyncStatus,
     ui::theme::Theme,
 };
 use ratatui::{
@@ -11,18 +11,16 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-/// Breadcrumb on the left (`Hopes / Tasks / All`), completion and sync state on the
-/// right. A hairline rule is drawn on the row below by the layout orchestrator.
-pub fn draw_header(f: &mut Frame, app: &App, area: Rect) {
-    let stats = app.stats();
+pub fn draw_header(f: &mut Frame, state: &AppState, area: Rect) {
+    let stats = state.stats();
 
-    let section = match app.view_mode {
+    let section = match state.view_mode {
         ViewMode::Table => "Tasks",
         ViewMode::Kanban => "Board",
     };
-    let current = match &app.tag_filter {
+    let current = match &state.tag_filter {
         Some(tag) => format!("#{}", tag.strip_prefix('#').unwrap_or(tag)),
-        None => app.nav_section.label().to_string(),
+        None => state.nav_section.label().to_string(),
     };
 
     let sep = Span::styled(" / ", Theme::muted());
@@ -34,8 +32,8 @@ pub fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         sep,
         Span::styled(current, Theme::text_bold()),
     ];
-    if app.tag_filter.is_some() {
-        let shown = app.get_filtered_indices().len();
+    if state.tag_filter.is_some() {
+        let shown = state.filtered_indices().len();
         left.push(Span::styled(
             format!("  {shown}/{}", stats.total),
             Theme::muted(),
@@ -46,7 +44,7 @@ pub fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         format!("{}% done", stats.percent),
         Theme::muted(),
     )];
-    if let Some(sync) = sync_span(&app.sync_status) {
+    if let Some(sync) = sync_span(&state.sync_status) {
         right.push(Span::raw("   "));
         right.push(sync);
     }

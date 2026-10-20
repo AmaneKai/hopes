@@ -28,12 +28,9 @@ impl Default for SyncConfig {
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Backend {
-    /// A single `items.json` (works with the git sync engine).
     #[default]
     Json,
-    /// A local `hopes.db` (requires building with `--features sqlite`).
     Sqlite,
-    /// An external program you provide; see `storage::exec_store`.
     Exec,
 }
 
@@ -41,9 +38,7 @@ pub enum Backend {
 #[serde(default)]
 pub struct StorageConfig {
     pub backend: Backend,
-    /// Overrides the data directory (falls back to `sync.data_dir`, then the default).
     pub dir: Option<PathBuf>,
-    /// Program and leading args for the `exec` backend; `load`/`save` is appended.
     pub command: Vec<String>,
 }
 

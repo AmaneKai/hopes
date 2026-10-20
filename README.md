@@ -131,30 +131,59 @@ Writes are atomic: updates serialize to a temporary file (`.tmp`) and sync to di
 
 ## Architecture
 
+Components own their own UI state and talk to the rest of the app through
+messages. Keys become `Action`s; `App::process_action` is the only code that
+changes the task list, persists it, or touches sync. After each action every
+component gets an `update` call so it can react (clamp a cursor, reset a scroll).
+
+```
+key press --> Component::handle_key --> Action --> App::process_action
+                                                        |-- mutates AppState, saves, requests sync
+                                                        '-- Component::update(&action) on every component
+```
+
 ```
 src/
-├── app.rs               # State coordinator, caching, and business logic
-├── event.rs             # Non-blocking terminal event polling
-├── main.rs              # Entry point and event loop
-├── models/
-│   ├── item.rs          # Task data model with multi-line notes
+├── lib.rs               # The whole app as a library, so tests can drive it
+├── main.rs              # Thin binary: terminal setup/teardown, detached sync flush
+├── app.rs               # Event loop, action queue, key routing, process_action
+├── action.rs            # The Action enum: everything that can happen
+├── domain/              # Pure data, no UI knowledge
+│   ├── mod.rs           # AppState (items, filter/sort, derived caches) and view enums
+│   ├── item.rs          # Task model with multi-line notes
 │   ├── priority.rs      # Priority levels (Urgent, High, Med, Low)
-│   └── status.rs        # Status tracking (Todo, WIP, Done)
-├── storage/
-│   └── json_store.rs    # Atomic streaming file storage
-├── tui.rs               # Terminal initialization and teardown
-└── ui/
-    ├── components/
-    │   ├── footer.rs    # Mode indicator, statusline, and key hints
-    │   ├── header.rs    # Top bar pills and workspace metrics
-    │   ├── inspector.rs # Detailed task notes, progress, and cheatsheet
-    │   ├── kanban.rs    # 3-column Kanban board rendering
-    │   ├── list.rs      # High-density data table
-    │   ├── modal.rs     # Create/Edit, Search, and Help dialogs
-    │   └── nav.rs       # Left navigation tree and tag filter list
-    ├── mod.rs           # Responsive layout manager
-    └── theme.rs         # Visual styles, palettes, and badges
+│   ├── status.rs        # Status tracking (Todo, WIP, Done)
+│   └── audit.rs         # In-memory activity log
+├── ui/
+│   ├── mod.rs           # Component and TaskView traits
+│   ├── layout.rs        # Screen and pane geometry
+│   ├── text_input.rs    # Vim-style editing engine shared by every text field
+│   ├── popup.rs, field.rs, theme.rs
+│   └── components/      # Each owns its own state
+│       ├── table.rs     # Row cursor, gg / dd chords
+│       ├── kanban.rs    # Active column and per-column card cursors
+│       ├── nav.rs       # Navigator cursor
+│       ├── inspector.rs # Details scroll
+│       ├── editor.rs    # New/edit task form and its draft text
+│       ├── cmdline.rs   # `:` command and `/` find input row
+│       ├── help.rs      # Shortcut popup and its scroll
+│       └── header.rs, footer.rs
+├── systems/             # IO, never touches UI state
+│   ├── storage/         # json, sqlite and exec backends behind one trait
+│   └── sync/            # Git sync worker thread and detached quit-time push
+├── config.rs, event.rs, tui.rs
+└── utils/textedit.rs    # Pure vim-motion string math
+tests/                   # All tests live here and use only the public API
+├── user_flows.rs        # Key presses in, task state / disk / rendered screen out
+├── editor.rs            # The task form as a component
+├── text_input.rs        # Vim field editing engine
+├── textedit.rs          # Vim motion string math
+├── git.rs, sync_engine.rs        # Git wrappers and the sync worker, on real repos
+└── storage_exec.rs, storage_sqlite.rs
 ```
+
+Adding a feature is usually one new `Action` variant, one arm in `process_action`,
+and a key binding in the component that should own it.
 
 ---
 

@@ -1,16 +1,13 @@
-use crate::models::Priority;
+use crate::domain::Priority;
 use ratatui::{
     style::{Color, Modifier, Style},
     text::Span,
     widgets::{Block, Borders, Padding},
 };
 
-/// Style helpers. Only ANSI names and `Reset` are used (no RGB), so the UI follows
-/// whatever palette the terminal is running, light or dark.
 pub struct Theme;
 
 impl Theme {
-    /// Colored priority glyph followed by a space.
     pub fn priority_marker(priority: Priority) -> Span<'static> {
         Span::styled(
             format!("{} ", priority.glyph()),
@@ -18,7 +15,6 @@ impl Theme {
         )
     }
 
-    /// Gutter shown before a selectable row: cursor, current selection, or blank.
     pub fn cursor_prefix(is_cursor: bool, is_current: bool) -> &'static str {
         if is_cursor {
             "> "
@@ -29,14 +25,10 @@ impl Theme {
         }
     }
 
-    /// A pane titled in the standard focus-dependent style.
     pub fn titled_pane(title: impl Into<String>, focused: bool) -> Block<'static> {
         Self::pane(title.into(), Self::pane_title(focused), focused)
     }
 
-    /// A borderless pane: a single left rule (brighter when focused), horizontal
-    /// padding, and the title on the first row. Titles carry a leading space so they
-    /// line up with the padded content.
     pub fn pane(title: String, title_style: Style, focused: bool) -> Block<'static> {
         Block::default()
             .borders(Borders::LEFT)
@@ -59,7 +51,6 @@ impl Theme {
         }
     }
 
-    /// Solid background that anchors the footer's status line.
     #[inline(always)]
     pub fn status_bar() -> Style {
         Style::default().bg(Color::Indexed(236))
@@ -75,13 +66,11 @@ impl Theme {
         Style::default().fg(Color::Reset)
     }
 
-    /// Cursor row: bold, no background.
     #[inline(always)]
     pub fn highlight() -> Style {
         Style::default().add_modifier(Modifier::BOLD)
     }
 
-    /// Small section heading ("Views", "Tags", ...).
     #[inline(always)]
     pub fn section() -> Style {
         Style::default()
@@ -111,7 +100,6 @@ impl Theme {
         Style::default().add_modifier(Modifier::BOLD)
     }
 
-    /// Mode label in the footer: colored text, no fill.
     #[inline(always)]
     pub fn mode(color: Color) -> Style {
         Style::default().fg(color).add_modifier(Modifier::BOLD)

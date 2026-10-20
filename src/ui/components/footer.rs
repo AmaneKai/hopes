@@ -1,7 +1,7 @@
 use crate::{
-    app::{App, AppMode, FocusPane},
-    ui::components::modal::styled_field_text,
-    ui::theme::Theme,
+    app::AppMode,
+    domain::{AppState, FocusPane},
+    ui::{text_input::TextInput, theme::Theme},
 };
 use ratatui::{
     Frame,
@@ -11,8 +11,15 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-pub fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
-    let (mode_label, mode_color) = match app.mode {
+pub struct FooterCtx<'a> {
+    pub mode: AppMode,
+    pub position: usize,
+    pub input: Option<&'a TextInput>,
+    pub pending: Option<&'static str>,
+}
+
+pub fn draw_status_line(f: &mut Frame, area: Rect, state: &AppState, ctx: &FooterCtx) {
+    let (mode_label, mode_color) = match ctx.mode {
         AppMode::Normal => ("NORMAL", Color::Gray),
         AppMode::Creating => ("INSERT", Color::Cyan),
         AppMode::Editing => ("EDIT", Color::Magenta),
@@ -22,60 +29,52 @@ pub fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     };
     let mode_span = Span::styled(format!("  {mode_label}"), Theme::mode(mode_color));
 
-    let mut line1_left = vec![mode_span, Span::raw(" ")];
+    let mut left = vec![mode_span, Span::raw(" ")];
 
-    let is_text_editing_field = matches!(app.mode, AppMode::Filtering | AppMode::Command)
-        || (matches!(app.mode, AppMode::Creating | AppMode::Editing)
-            && app.form_field != crate::app::FormField::Priority);
-    if is_text_editing_field {
-        let (label, style) = if app.field_insert {
+    if let Some(input) = ctx.input {
+        let (label, style) = if input.insert {
             ("-- INSERT --", Theme::field_insert_badge())
-        } else if app.field_visual_anchor.is_some() {
+        } else if input.visual_anchor.is_some() {
             ("-- VISUAL --", Theme::field_visual_badge())
         } else {
             ("-- NORMAL --", Theme::field_normal_badge())
         };
-        line1_left.push(Span::styled(label, style));
-        line1_left.push(Span::raw(" "));
+        left.push(Span::styled(label, style));
+        left.push(Span::raw(" "));
     }
 
-    if app.pending_g {
-        line1_left.push(Span::styled("g...", Theme::status_message()));
-        line1_left.push(Span::raw(" "));
-    } else if app.pending_d {
-        line1_left.push(Span::styled("d...", Theme::status_message()));
-        line1_left.push(Span::raw(" "));
+    if let Some(pending) = ctx.pending {
+        left.push(Span::styled(pending, Theme::status_message()));
+        left.push(Span::raw(" "));
     }
 
-    if let Some(msg) = app.get_status_message() {
-        line1_left.push(Span::styled(msg, Theme::status_message()));
+    if let Some(msg) = state.status() {
+        left.push(Span::styled(msg, Theme::status_message()));
     }
 
-    let filtered_indices = app.get_filtered_indices();
-    let total_filtered = filtered_indices.len();
-    let curr_pos = match app.table_state.selected() {
-        Some(i) if total_filtered > 0 => i + 1,
-        _ => 0,
-    };
-    let line1_right = vec![Span::styled(
-        format!("{curr_pos} / {total_filtered}  "),
+    let right = vec![Span::styled(
+        format!("{} / {}  ", ctx.position, state.filtered_indices().len()),
         Theme::muted(),
     )];
 
-    let line2_spans = match app.mode {
-        AppMode::Command | AppMode::Filtering => {
-            let (prefix, input) = if app.mode == AppMode::Command {
-                (":", &app.command_input)
-            } else {
-                ("/", &app.filter_input)
-            };
-            let mut spans = vec![Span::raw(prefix)];
-            let text = styled_field_text(input, app.text_cursor, app.field_visual_anchor);
-            if let Some(line) = text.lines.into_iter().next() {
-                spans.extend(line.spans);
-            }
-            spans
-        }
+    let bar = Theme::status_bar();
+    f.render_widget(
+        Paragraph::new(Line::from(left))
+            .style(bar)
+            .alignment(Alignment::Left),
+        area,
+    );
+    f.render_widget(
+        Paragraph::new(Line::from(right))
+            .style(bar)
+            .alignment(Alignment::Right),
+        area,
+    );
+}
+
+pub fn draw_hints(f: &mut Frame, area: Rect, state: &AppState, ctx: &FooterCtx) {
+    let editing = ctx.input;
+    let spans = match ctx.mode {
         AppMode::Normal => {
             let mut spans = vec![
                 Span::styled("  ? ", Theme::shortcut_key()),
@@ -85,7 +84,7 @@ pub fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                 Span::styled("/ ", Theme::shortcut_key()),
                 Span::styled("find", Theme::shortcut_desc()),
             ];
-            let context: &[(&str, &str)] = match app.focus_pane {
+            let context: &[(&str, &str)] = match state.focus {
                 FocusPane::Main => &[("e", "edit"), ("Space", "toggle"), ("dd", "delete")],
                 FocusPane::Nav => &[("Enter", "open"), ("1-5", "jump")],
                 FocusPane::Inspector => &[("j/k", "scroll"), ("Tab", "next pane")],
@@ -101,7 +100,7 @@ pub fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             spans
         }
         AppMode::Creating | AppMode::Editing
-            if is_text_editing_field && app.field_visual_anchor.is_some() =>
+            if editing.is_some_and(|i| i.visual_anchor.is_some()) =>
         {
             vec![
                 Span::styled("h/j/k/l/w/b/e/0/$", Theme::shortcut_key()),
@@ -116,7 +115,7 @@ pub fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                 Span::styled(":Exit Visual", Theme::shortcut_desc()),
             ]
         }
-        AppMode::Creating | AppMode::Editing if is_text_editing_field && !app.field_insert => vec![
+        AppMode::Creating | AppMode::Editing if editing.is_some_and(|i| !i.insert) => vec![
             Span::styled("h/j/k/l", Theme::shortcut_key()),
             Span::styled(":Move ", Theme::shortcut_desc()),
             Span::styled("w/b/e", Theme::shortcut_key()),
@@ -146,43 +145,15 @@ pub fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             Span::styled("<Esc>", Theme::shortcut_key()),
             Span::styled(":Normal Mode / Cancel", Theme::shortcut_desc()),
         ],
+        AppMode::Filtering | AppMode::Command => return,
         AppMode::Help => vec![
             Span::styled("<Esc> / ? / q / <Enter>", Theme::shortcut_key()),
             Span::styled(":Close Cheatsheet", Theme::shortcut_desc()),
         ],
     };
 
-    let bar = Theme::status_bar();
-    let p1_left = Paragraph::new(Line::from(line1_left))
-        .style(bar)
-        .alignment(Alignment::Left);
-    let p1_right = Paragraph::new(Line::from(line1_right))
-        .style(bar)
-        .alignment(Alignment::Right);
-    let p2 = Paragraph::new(Line::from(line2_spans)).alignment(Alignment::Left);
-
-    if area.height >= 2 {
-        let r1 = Rect {
-            x: area.x,
-            y: area.y,
-            width: area.width,
-            height: 1,
-        };
-        let r2 = Rect {
-            x: area.x,
-            y: area.y + 1,
-            width: area.width,
-            height: 1,
-        };
-        f.render_widget(p1_left, r1);
-        f.render_widget(p1_right, r1);
-        f.render_widget(p2, r2);
-        if matches!(app.mode, AppMode::Command | AppMode::Filtering) {
-            let max_x = r2.x + r2.width.saturating_sub(1);
-            f.set_cursor_position(((r2.x + 1 + app.text_cursor as u16).min(max_x), r2.y));
-        }
-    } else {
-        f.render_widget(p1_left, area);
-        f.render_widget(p1_right, area);
-    }
+    f.render_widget(
+        Paragraph::new(Line::from(spans)).alignment(Alignment::Left),
+        area,
+    );
 }
