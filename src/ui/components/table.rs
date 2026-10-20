@@ -16,6 +16,18 @@ use ratatui::{
 };
 
 const PAGE: usize = 5;
+/// Highlight symbol, status, priority and the three column gaps.
+const FIXED_COLS: usize = 2 + 2 + 7 + 3;
+const MIN_TITLE: usize = 12;
+
+fn ellipsize(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(width.saturating_sub(1)).collect();
+    out.push('\u{2026}');
+    out
+}
 
 #[derive(Default)]
 pub struct TableComponent {
@@ -206,8 +218,30 @@ impl Component for TableComponent {
             return;
         }
 
+        let tag_texts: Vec<String> = visible_indices
+            .iter()
+            .map(|&i| {
+                state.items[i]
+                    .tags
+                    .iter()
+                    .map(|t| format!("#{t}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect();
+        let inner_width = area.width.saturating_sub(3) as usize;
+        let tags_width = tag_texts
+            .iter()
+            .map(|t| t.chars().count())
+            .max()
+            .unwrap_or(0)
+            .min(inner_width / 3);
+        let title_width = inner_width
+            .saturating_sub(FIXED_COLS + tags_width)
+            .max(MIN_TITLE);
+
         let mut rows: Vec<Row> = Vec::with_capacity(visible_indices.len());
-        for &real_idx in visible_indices {
+        for (row, &real_idx) in visible_indices.iter().enumerate() {
             let item = &state.items[real_idx];
             let (badge, badge_color) = item.status.badge();
             let is_complete = item.status == Status::Complete;
@@ -219,7 +253,7 @@ impl Component for TableComponent {
             } else {
                 Style::default()
             };
-            let title_cell = Cell::from(item.title.as_str()).style(title_style);
+            let title_cell = Cell::from(ellipsize(&item.title, title_width)).style(title_style);
 
             let prio_cell = if is_complete {
                 Cell::from("")
@@ -232,14 +266,7 @@ impl Component for TableComponent {
                 Cell::from(label).style(style)
             };
 
-            let tags_cell = Cell::from(
-                item.tags
-                    .iter()
-                    .map(|t| format!("#{t}"))
-                    .collect::<Vec<_>>()
-                    .join(" "),
-            )
-            .style(Theme::tag());
+            let tags_cell = Cell::from(ellipsize(&tag_texts[row], tags_width)).style(Theme::tag());
 
             rows.push(Row::new(vec![
                 status_cell,
@@ -253,9 +280,9 @@ impl Component for TableComponent {
             rows,
             [
                 Constraint::Length(2),
-                Constraint::Min(12),
+                Constraint::Min(MIN_TITLE as u16),
                 Constraint::Length(7),
-                Constraint::Percentage(25),
+                Constraint::Length(tags_width as u16),
             ],
         )
         .block(block)

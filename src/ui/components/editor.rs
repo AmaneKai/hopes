@@ -22,6 +22,9 @@ use ratatui::{
 const LABEL_WIDTH: u16 = 10;
 const NOTES_ROWS: u16 = 3;
 const FORM_HEIGHT: u16 = 15;
+/// Inner height below which blank spacers and rules are dropped so every row stays visible.
+const ROOMY_INNER: u16 = FORM_HEIGHT - 2;
+const NARROW_INNER: u16 = 48;
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum FormField {
@@ -155,7 +158,7 @@ impl EditorComponent {
         hits.into_iter().cloned().collect()
     }
 
-    /// Index Tab would complete: the picked chip, else the best match for typed text.
+    /// Index Tab or Enter would complete: the picked chip, else the best match for typed text.
     fn tag_target(&self) -> Option<usize> {
         self.tag_sel
             .or_else(|| (!split_tags(&self.tags).1.is_empty()).then_some(0))
@@ -245,12 +248,7 @@ impl Component for EditorComponent {
                     return KeyResult::Handled;
                 }
                 KeyCode::Tab | KeyCode::Enter => {
-                    let pick = if code == KeyCode::Enter {
-                        self.tag_sel
-                    } else {
-                        self.tag_target()
-                    };
-                    if let Some(tag) = pick.and_then(|i| suggestions.get(i)) {
+                    if let Some(tag) = self.tag_target().and_then(|i| suggestions.get(i)) {
                         self.accept_tag(tag);
                         return KeyResult::Handled;
                     }
@@ -315,6 +313,10 @@ impl Component for EditorComponent {
         };
         let inner = popup_frame(f, area, title, 68, FORM_HEIGHT);
 
+        let roomy = inner.height >= ROOMY_INNER;
+        let gap = u16::from(roomy);
+        let notes_rows = if roomy { NOTES_ROWS } else { 1 };
+
         let [
             _,
             title_row,
@@ -328,12 +330,12 @@ impl Component for EditorComponent {
             _,
             hint_row,
         ] = Layout::vertical([
+            Constraint::Length(gap),
             Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(NOTES_ROWS),
-            Constraint::Length(1),
-            Constraint::Length(1),
+            Constraint::Length(gap),
+            Constraint::Length(notes_rows),
+            Constraint::Length(gap),
+            Constraint::Length(gap),
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
@@ -446,22 +448,35 @@ impl Component for EditorComponent {
         }
 
         let picking = !suggestions.is_empty();
-        let hint = Line::from(vec![
-            Span::styled("[Ctrl-s] ", Theme::shortcut_key()),
-            Span::styled("save   ", Theme::shortcut_desc()),
-            Span::styled("[Tab] ", Theme::shortcut_key()),
-            Span::styled(
-                if picking { "complete   " } else { "next   " },
-                Theme::shortcut_desc(),
-            ),
-            Span::styled(
-                if picking { "[\u{2191}\u{2193}] " } else { "" },
-                Theme::shortcut_key(),
-            ),
-            Span::styled(if picking { "pick   " } else { "" }, Theme::shortcut_desc()),
-            Span::styled("[Esc] ", Theme::shortcut_key()),
-            Span::styled("cancel", Theme::shortcut_desc()),
-        ]);
+        let hint = if inner.width < NARROW_INNER {
+            Line::from(vec![
+                Span::styled("[^s] ", Theme::shortcut_key()),
+                Span::styled("save ", Theme::shortcut_desc()),
+                Span::styled("[Tab] ", Theme::shortcut_key()),
+                Span::styled(
+                    if picking { "fill " } else { "next " },
+                    Theme::shortcut_desc(),
+                ),
+                Span::styled("[Esc]", Theme::shortcut_key()),
+            ])
+        } else {
+            Line::from(vec![
+                Span::styled("[Ctrl-s] ", Theme::shortcut_key()),
+                Span::styled("save   ", Theme::shortcut_desc()),
+                Span::styled("[Tab] ", Theme::shortcut_key()),
+                Span::styled(
+                    if picking { "complete   " } else { "next   " },
+                    Theme::shortcut_desc(),
+                ),
+                Span::styled(
+                    if picking { "[\u{2191}\u{2193}] " } else { "" },
+                    Theme::shortcut_key(),
+                ),
+                Span::styled(if picking { "pick   " } else { "" }, Theme::shortcut_desc()),
+                Span::styled("[Esc] ", Theme::shortcut_key()),
+                Span::styled("cancel", Theme::shortcut_desc()),
+            ])
+        };
         f.render_widget(Paragraph::new(hint), hint_row);
     }
 }

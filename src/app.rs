@@ -645,15 +645,26 @@ impl App {
         header::draw_header(f, &self.state, screen.header);
         layout::draw_rule(f, screen.rule);
 
+        // Panes that don't fit are never dropped: the focused one takes over the main area.
         let body = layout::split_body(screen.body);
         if let Some(area) = body.sidebar {
             self.nav
                 .render(f, area, &self.state, focus == FocusPane::Nav);
         }
-        let main_focused = focus == FocusPane::Main;
-        match self.state.view_mode {
-            ViewMode::Table => self.table.render(f, body.main, &self.state, main_focused),
-            ViewMode::Kanban => self.kanban.render(f, body.main, &self.state, main_focused),
+        match focus {
+            FocusPane::Nav if body.sidebar.is_none() => {
+                self.nav.render(f, body.main, &self.state, true);
+            }
+            FocusPane::Inspector if body.inspector.is_none() => {
+                self.inspector.render(f, body.main, &self.state, true);
+            }
+            _ => {
+                let main_focused = focus == FocusPane::Main;
+                match self.state.view_mode {
+                    ViewMode::Table => self.table.render(f, body.main, &self.state, main_focused),
+                    ViewMode::Kanban => self.kanban.render(f, body.main, &self.state, main_focused),
+                }
+            }
         }
         if let Some(area) = body.inspector {
             self.inspector

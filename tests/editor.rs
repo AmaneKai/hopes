@@ -220,6 +220,15 @@ fn tab_completes_the_typed_tag_prefix() {
 }
 
 #[test]
+fn enter_completes_the_typed_prefix_without_saving() {
+    let state = tagged_state();
+    let mut editor = at_tags(&state);
+    type_str(&mut editor, &state, "pro");
+    assert!(is_handled(&editor.handle_key(key(KeyCode::Enter), &state)));
+    assert_eq!(saved_tags(&mut editor, &state), vec!["project"]);
+}
+
+#[test]
 fn arrows_pick_a_tag_and_enter_accepts_it_without_saving() {
     let state = tagged_state();
     let mut editor = at_tags(&state);
