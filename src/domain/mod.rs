@@ -2,11 +2,13 @@ pub mod audit;
 pub mod due;
 pub mod item;
 pub mod priority;
+pub mod repeat;
 pub mod status;
 
 pub use audit::AuditLog;
 pub use item::Item;
 pub use priority::Priority;
+pub use repeat::Repeat;
 pub use status::Status;
 
 use crate::systems::sync::SyncStatus;

@@ -1,4 +1,4 @@
-use super::{priority::Priority, status::Status};
+use super::{priority::Priority, repeat::Repeat, status::Status};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +13,8 @@ pub struct Item {
     pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub due: Option<NaiveDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat: Option<Repeat>,
 }
 
 impl Item {
@@ -24,6 +26,7 @@ impl Item {
             status: Status::Todo,
             tags,
             due: None,
+            repeat: None,
         }
     }
 

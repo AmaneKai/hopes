@@ -56,6 +56,7 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
         &[
             ("Tab / Ctrl-j", "Next field"),
             ("Due field", "fri, tomorrow, +3d, 2w, oct 25"),
+            ("Repeat field", "weekly, every fri, 2w, weekdays"),
             ("Shift-Tab / Ctrl-k", "Previous field"),
             ("Ctrl-s", "Save"),
             ("Esc", "Normal mode, then cancel"),

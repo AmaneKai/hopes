@@ -110,6 +110,11 @@ fn draw_task_details(f: &mut Frame, state: &AppState, area: Rect, is_focused: bo
         None => vec![Span::styled("None", Theme::muted())],
     };
     lines.push(property("Due", due));
+    let repeat = match item.repeat {
+        Some(rule) => vec![Span::raw(format!("\u{21bb} {rule}"))],
+        None => vec![Span::styled("None", Theme::muted())],
+    };
+    lines.push(property("Repeat", repeat));
     let tags = if item.tags.is_empty() {
         vec![Span::styled("Empty", Theme::muted())]
     } else {

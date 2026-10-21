@@ -2,7 +2,7 @@ use chrono::NaiveDate;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use hopes::{
     action::Action,
-    domain::{AppState, Item, Priority, Status},
+    domain::{AppState, Item, Priority, Repeat, Status},
     systems::sync::SyncStatus,
     ui::{Component, KeyResult, components::editor::EditorComponent},
 };
@@ -90,6 +90,8 @@ fn saving_needs_a_title_and_carries_the_form_values() {
     editor.handle_key(key(KeyCode::Tab), &state);
     type_str(&mut editor, &state, "2026-10-25");
     editor.handle_key(key(KeyCode::Tab), &state);
+    type_str(&mut editor, &state, "every fri");
+    editor.handle_key(key(KeyCode::Tab), &state);
     type_str(&mut editor, &state, "a, b,, c");
 
     let KeyResult::Emit(Action::SaveTask(draft)) = editor.handle_key(key(KeyCode::Enter), &state)
@@ -101,6 +103,7 @@ fn saving_needs_a_title_and_carries_the_form_values() {
     assert_eq!(draft.priority, Priority::Urgent);
     assert_eq!(draft.tags, vec!["a", "b", "c"]);
     assert_eq!(draft.due, NaiveDate::from_ymd_opt(2026, 10, 25));
+    assert_eq!(draft.repeat, Repeat::parse("every fri").unwrap());
     assert_eq!(draft.status, Status::InProgress);
 }
 
@@ -198,7 +201,7 @@ fn tagged_state() -> AppState {
 fn at_tags(state: &AppState) -> EditorComponent {
     let mut editor = opened(state, Status::Todo);
     type_str(&mut editor, state, "title");
-    for _ in 0..4 {
+    for _ in 0..5 {
         editor.handle_key(key(KeyCode::Tab), state);
     }
     editor
@@ -304,4 +307,34 @@ fn editing_loads_the_due_date_and_an_emptied_field_clears_it() {
         panic!("expected SaveTask");
     };
     assert_eq!(draft.due, None);
+}
+
+#[test]
+fn a_repeat_rule_without_a_due_date_starts_today_or_on_its_first_day() {
+    let state = state_with(Vec::new());
+    let mut editor = opened(&state, Status::Todo);
+    type_str(&mut editor, &state, "show");
+    for _ in 0..4 {
+        editor.handle_key(key(KeyCode::Tab), &state);
+    }
+    type_str(&mut editor, &state, "daily");
+
+    let KeyResult::Emit(Action::SaveTask(draft)) = editor.handle_key(key(KeyCode::Enter), &state)
+    else {
+        panic!("expected SaveTask");
+    };
+    assert_eq!(draft.due, Some(chrono::Local::now().date_naive()));
+}
+
+#[test]
+fn an_unparseable_repeat_rule_blocks_saving() {
+    let state = state_with(Vec::new());
+    let mut editor = opened(&state, Status::Todo);
+    type_str(&mut editor, &state, "title");
+    for _ in 0..4 {
+        editor.handle_key(key(KeyCode::Tab), &state);
+    }
+    type_str(&mut editor, &state, "sometimes");
+
+    assert!(is_handled(&editor.handle_key(key(KeyCode::Enter), &state)));
 }

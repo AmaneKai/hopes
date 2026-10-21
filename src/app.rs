@@ -1,7 +1,10 @@
 use crate::{
     action::{Action, NavTarget, TaskDraft},
     config::{Backend, Config},
-    domain::{AppState, FocusPane, Item, NavSection, Priority, ViewMode, snippet},
+    domain::{
+        AppState, FocusPane, Item, NavSection, Priority, Status, ViewMode, due::relative_label,
+        snippet,
+    },
     event::{Event, EventHandler},
     systems::{
         storage::{self, Storage},
@@ -379,6 +382,7 @@ impl App {
         item.priority = draft.priority;
         item.tags = draft.tags.clone();
         item.due = draft.due;
+        item.repeat = draft.repeat;
         let short = snippet(&item.title, 28);
         self.commit_change("Task updated".into(), format!("Edited \"{short}\""));
     }
@@ -389,6 +393,7 @@ impl App {
         item.priority = draft.priority;
         item.status = draft.status;
         item.due = draft.due;
+        item.repeat = draft.repeat;
         let short = snippet(&draft.title, 28);
         self.state.items.push(item);
         self.commit_change("Task created".into(), format!("Created \"{short}\""));
@@ -428,7 +433,14 @@ impl App {
         let Some(item) = self.state.items.get_mut(idx) else {
             return;
         };
-        item.status = item.status.next();
+        let next = item.status.next();
+        if self.roll_if_repeating(idx, next) {
+            return;
+        }
+        let Some(item) = self.state.items.get_mut(idx) else {
+            return;
+        };
+        item.status = next;
         let label = item.status.label();
         let short = snippet(&item.title, 28);
         self.commit_change(
@@ -441,17 +453,46 @@ impl App {
         let Some(item) = self.state.items.get_mut(idx) else {
             return;
         };
-        item.status = if forward {
+        let to = if forward {
             item.status.next()
         } else {
             item.status.prev()
         };
+        if self.roll_if_repeating(idx, to) {
+            return;
+        }
+        let Some(item) = self.state.items.get_mut(idx) else {
+            return;
+        };
+        item.status = to;
         let label = item.status.label();
         let short = snippet(&item.title, 28);
         self.commit_change(
             format!("Shifted task to {label}"),
             format!("Shifted \"{short}\" to {label}"),
         );
+    }
+
+    /// Completing a repeating task sends it back to To Do with its next due date.
+    /// Returns false (and changes nothing) when `to` is not Complete or the task doesn't repeat.
+    fn roll_if_repeating(&mut self, idx: usize, to: Status) -> bool {
+        let Some(item) = self.state.items.get_mut(idx) else {
+            return false;
+        };
+        let (Status::Complete, Some(repeat)) = (to, item.repeat) else {
+            return false;
+        };
+        let today = chrono::Local::now().date_naive();
+        let next = repeat.next_after(item.due.unwrap_or(today), today);
+        item.due = Some(next);
+        item.status = Status::Todo;
+        let short = snippet(&item.title, 28);
+        let when = relative_label(next, today);
+        self.commit_change(
+            format!("Done \u{b7} next {when}"),
+            format!("Completed \"{short}\", next {when}"),
+        );
+        true
     }
 
     fn set_priority(&mut self, idx: usize, priority: Priority) {

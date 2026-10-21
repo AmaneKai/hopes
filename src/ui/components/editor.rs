@@ -1,7 +1,7 @@
 use crate::{
     action::{Action, TaskDraft},
     domain::{
-        AppState, Priority, Status,
+        AppState, Priority, Repeat, Status,
         due::{self, DueUrgency, InvalidDate, full_label, urgency},
     },
     ui::{
@@ -25,7 +25,7 @@ use ratatui::{
 
 const LABEL_WIDTH: u16 = 10;
 const NOTES_ROWS: u16 = 3;
-const FORM_HEIGHT: u16 = 16;
+const FORM_HEIGHT: u16 = 17;
 /// Inner height below which blank spacers and rules are dropped so every row stays visible.
 const ROOMY_INNER: u16 = FORM_HEIGHT - 2;
 const NARROW_INNER: u16 = 48;
@@ -36,6 +36,7 @@ pub enum FormField {
     Description,
     Priority,
     Due,
+    Repeat,
     Tags,
 }
 
@@ -46,7 +47,8 @@ impl FormField {
             Self::Title => Self::Description,
             Self::Description => Self::Priority,
             Self::Priority => Self::Due,
-            Self::Due => Self::Tags,
+            Self::Due => Self::Repeat,
+            Self::Repeat => Self::Tags,
             Self::Tags => Self::Title,
         }
     }
@@ -58,7 +60,8 @@ impl FormField {
             Self::Description => Self::Title,
             Self::Priority => Self::Description,
             Self::Due => Self::Priority,
-            Self::Tags => Self::Due,
+            Self::Tags => Self::Repeat,
+            Self::Repeat => Self::Due,
         }
     }
 }
@@ -68,6 +71,7 @@ pub struct EditorComponent {
     description: String,
     tags: String,
     due: String,
+    repeat: String,
     priority: Priority,
     field: FormField,
     tag_sel: Option<usize>,
@@ -83,6 +87,7 @@ impl Default for EditorComponent {
             description: String::new(),
             tags: String::new(),
             due: String::new(),
+            repeat: String::new(),
             priority: Priority::Medium,
             field: FormField::Title,
             tag_sel: None,
@@ -103,6 +108,7 @@ impl EditorComponent {
         self.description.clear();
         self.tags.clear();
         self.due.clear();
+        self.repeat.clear();
         self.priority = Priority::Medium;
         self.field = FormField::Title;
         self.edit_idx = None;
@@ -119,6 +125,7 @@ impl EditorComponent {
         self.priority = item.priority;
         self.tags = item.tags.join(", ");
         self.due = item.due.map(|d| d.to_string()).unwrap_or_default();
+        self.repeat = item.repeat.map(|r| r.to_string()).unwrap_or_default();
         self.field = FormField::Title;
         self.edit_idx = Some(idx);
         self.focus_field();
@@ -130,6 +137,7 @@ impl EditorComponent {
             FormField::Description => Some(&mut self.description),
             FormField::Tags => Some(&mut self.tags),
             FormField::Due => Some(&mut self.due),
+            FormField::Repeat => Some(&mut self.repeat),
             FormField::Priority => None,
         };
         (&mut self.input, buf)
@@ -208,11 +216,19 @@ impl EditorComponent {
         due::parse(&self.due, Local::now().date_naive())
     }
 
+    fn parsed_repeat(&self) -> Result<Option<Repeat>, InvalidDate> {
+        Repeat::parse(&self.repeat)
+    }
+
     fn save_action(&self) -> Option<Action> {
         if self.title.trim().is_empty() {
             return None;
         }
-        let due = self.parsed_due().ok()?;
+        let repeat = self.parsed_repeat().ok()?;
+        let mut due = self.parsed_due().ok()?;
+        if due.is_none() {
+            due = repeat.map(|r| r.first_from(Local::now().date_naive()));
+        }
         let tags = self
             .tags
             .split(',')
@@ -226,6 +242,7 @@ impl EditorComponent {
             priority: self.priority,
             tags,
             due,
+            repeat,
             status: self.create_status,
         }))
     }
@@ -303,7 +320,11 @@ impl Component for EditorComponent {
         }
 
         match self.field {
-            FormField::Title | FormField::Description | FormField::Due | FormField::Tags => {
+            FormField::Title
+            | FormField::Description
+            | FormField::Due
+            | FormField::Repeat
+            | FormField::Tags => {
                 let allow_newline = self.field == FormField::Description;
                 self.tag_sel = None;
                 let (input, buf) = self.input_and_buf();
@@ -345,6 +366,7 @@ impl Component for EditorComponent {
             _,
             prio_row,
             due_row,
+            repeat_row,
             tags_row,
             chips_row,
             _,
@@ -360,6 +382,7 @@ impl Component for EditorComponent {
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
+            Constraint::Length(1),
             Constraint::Min(0),
             Constraint::Length(1),
         ])
@@ -369,6 +392,7 @@ impl Component for EditorComponent {
         let notes_focused = self.field == FormField::Description;
         let prio_focused = self.field == FormField::Priority;
         let due_focused = self.field == FormField::Due;
+        let repeat_focused = self.field == FormField::Repeat;
         let tags_focused = self.field == FormField::Tags;
         let cursor = self.input.cursor;
         let anchor = self.input.visual_anchor;
@@ -464,6 +488,39 @@ impl Component for EditorComponent {
         if due_focused {
             let x = due_input.x + (cursor as u16).min(due_input.width.saturating_sub(1));
             f.set_cursor_position((x, due_input.y));
+        }
+
+        let (g, l, v) = split_row(repeat_row);
+        f.render_widget(gutter(repeat_focused), g);
+        f.render_widget(label("Repeat", repeat_focused), l);
+        let (preview, preview_style) = match self.parsed_repeat() {
+            Ok(Some(rule)) => (format!("\u{21bb} {rule}"), Theme::muted()),
+            Ok(None) => (String::new(), Theme::muted()),
+            Err(InvalidDate) => (
+                "not a rule (try weekly, every fri, 2w)".to_string(),
+                Style::default().fg(Color::Red),
+            ),
+        };
+        let preview_w = preview.chars().count() as u16;
+        let [repeat_input, repeat_preview] =
+            Layout::horizontal([Constraint::Min(1), Constraint::Length(preview_w + 1)]).areas(v);
+        f.render_widget(
+            Paragraph::new(field_or_placeholder(
+                &self.repeat,
+                cursor,
+                repeat_focused.then_some(anchor).flatten(),
+                "daily, weekly, every fri, 2w",
+            )),
+            repeat_input,
+        );
+        f.render_widget(
+            Paragraph::new(Span::styled(preview, preview_style))
+                .alignment(ratatui::layout::Alignment::Right),
+            repeat_preview,
+        );
+        if repeat_focused {
+            let x = repeat_input.x + (cursor as u16).min(repeat_input.width.saturating_sub(1));
+            f.set_cursor_position((x, repeat_input.y));
         }
 
         let (g, l, v) = split_row(tags_row);

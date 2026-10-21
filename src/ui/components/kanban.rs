@@ -259,7 +259,13 @@ impl KanbanComponent {
                 lines.push(Line::from(vec![
                     Span::raw("    "),
                     Span::styled(
-                        format!("due {}", relative_label(due, today)),
+                        format!(
+                            "due {}{}",
+                            relative_label(due, today),
+                            item.repeat
+                                .map(|r| format!(" \u{21bb} {r}"))
+                                .unwrap_or_default()
+                        ),
                         Theme::due(urgency(due, today)),
                     ),
                 ]));

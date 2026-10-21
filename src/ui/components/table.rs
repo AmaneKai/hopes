@@ -21,7 +21,7 @@ use ratatui::{
 
 const PAGE: usize = 5;
 /// Highlight symbol, status, due, priority and the four column gaps.
-const DUE_WIDTH: usize = 9;
+const DUE_WIDTH: usize = 11;
 const FIXED_COLS: usize = 2 + 2 + DUE_WIDTH + 7 + 4;
 const MIN_TITLE: usize = 12;
 
@@ -263,8 +263,13 @@ impl Component for TableComponent {
 
             let due_cell = match item.due {
                 Some(due) if !is_complete => {
-                    Cell::from(ellipsize(&relative_label(due, today), DUE_WIDTH))
-                        .style(Theme::due(urgency(due, today)))
+                    let mark = if item.repeat.is_some() {
+                        "\u{21bb} "
+                    } else {
+                        ""
+                    };
+                    let text = format!("{mark}{}", relative_label(due, today));
+                    Cell::from(ellipsize(&text, DUE_WIDTH)).style(Theme::due(urgency(due, today)))
                 }
                 _ => Cell::from(""),
             };

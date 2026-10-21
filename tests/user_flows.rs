@@ -273,10 +273,9 @@ fn ctrl_s_saves_from_any_field() {
     let mut s = Session::new();
     s.press(KeyCode::Char('a'));
     s.type_str("tagged");
-    s.press(KeyCode::Tab);
-    s.press(KeyCode::Tab);
-    s.press(KeyCode::Tab);
-    s.press(KeyCode::Tab);
+    for _ in 0..5 {
+        s.press(KeyCode::Tab);
+    }
     s.type_str("a, b");
     s.press_with(KeyCode::Char('s'), KeyModifiers::CONTROL);
 
@@ -687,4 +686,28 @@ fn an_empty_workspace_renders_and_accepts_input() {
     }
     assert!(s.items().is_empty());
     assert_eq!(s.app.mode(), AppMode::Normal);
+}
+
+#[test]
+fn completing_a_repeating_task_rolls_it_to_the_next_due_date() {
+    let today = chrono::Local::now().date_naive();
+    let mut show = Item::new("weekly show".into(), vec![]);
+    show.due = Some(today);
+    show.repeat = hopes::domain::Repeat::parse("weekly").unwrap();
+    let mut once = Item::new("one-off".into(), vec![]);
+    once.due = Some(today);
+    let mut s = Session::with_items(vec![show, once]);
+
+    s.dispatch(Action::ToggleTaskStatus(0));
+    s.dispatch(Action::ToggleTaskStatus(0));
+
+    let item = &s.items()[0];
+    assert_eq!(item.status, Status::Todo);
+    assert_eq!(item.due, Some(today + chrono::Duration::days(7)));
+    assert_eq!(s.saved()[0].due, item.due);
+
+    s.dispatch(Action::ToggleTaskStatus(1));
+    s.dispatch(Action::ToggleTaskStatus(1));
+    assert_eq!(s.items()[1].status, Status::Complete);
+    assert_eq!(s.items()[1].due, Some(today));
 }
