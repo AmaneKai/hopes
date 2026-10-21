@@ -1,3 +1,4 @@
+use chrono::NaiveDate;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use hopes::{
     action::Action,
@@ -87,6 +88,8 @@ fn saving_needs_a_title_and_carries_the_form_values() {
     editor.handle_key(key(KeyCode::Tab), &state);
     editor.handle_key(key(KeyCode::Char('1')), &state);
     editor.handle_key(key(KeyCode::Tab), &state);
+    type_str(&mut editor, &state, "2026-10-25");
+    editor.handle_key(key(KeyCode::Tab), &state);
     type_str(&mut editor, &state, "a, b,, c");
 
     let KeyResult::Emit(Action::SaveTask(draft)) = editor.handle_key(key(KeyCode::Enter), &state)
@@ -97,6 +100,7 @@ fn saving_needs_a_title_and_carries_the_form_values() {
     assert_eq!(draft.title, "ship it");
     assert_eq!(draft.priority, Priority::Urgent);
     assert_eq!(draft.tags, vec!["a", "b", "c"]);
+    assert_eq!(draft.due, NaiveDate::from_ymd_opt(2026, 10, 25));
     assert_eq!(draft.status, Status::InProgress);
 }
 
@@ -194,7 +198,7 @@ fn tagged_state() -> AppState {
 fn at_tags(state: &AppState) -> EditorComponent {
     let mut editor = opened(state, Status::Todo);
     type_str(&mut editor, state, "title");
-    for _ in 0..3 {
+    for _ in 0..4 {
         editor.handle_key(key(KeyCode::Tab), state);
     }
     editor
@@ -257,4 +261,47 @@ fn already_used_tags_are_not_suggested_again() {
     type_str(&mut editor, &state, "project, pro");
     editor.handle_key(key(KeyCode::Tab), &state);
     assert_eq!(saved_tags(&mut editor, &state), vec!["project", "pro"]);
+}
+
+#[test]
+fn an_unparseable_due_date_blocks_saving() {
+    let state = state_with(Vec::new());
+    let mut editor = opened(&state, Status::Todo);
+    type_str(&mut editor, &state, "title");
+    for _ in 0..3 {
+        editor.handle_key(key(KeyCode::Tab), &state);
+    }
+    type_str(&mut editor, &state, "someday");
+
+    assert!(is_handled(&editor.handle_key(key(KeyCode::Enter), &state)));
+}
+
+#[test]
+fn editing_loads_the_due_date_and_an_emptied_field_clears_it() {
+    let mut task = Item::new("t".into(), vec![]);
+    task.due = NaiveDate::from_ymd_opt(2026, 10, 25);
+    let state = state_with(vec![task]);
+    let mut editor = EditorComponent::default();
+    editor.update(&Action::OpenEditModal(0), &state);
+
+    let KeyResult::Emit(Action::SaveTask(draft)) = editor.handle_key(key(KeyCode::Enter), &state)
+    else {
+        panic!("expected SaveTask");
+    };
+    assert_eq!(draft.due, NaiveDate::from_ymd_opt(2026, 10, 25));
+
+    for _ in 0..3 {
+        editor.handle_key(key(KeyCode::Tab), &state);
+    }
+    let ctrl_u = KeyEvent::new_with_kind(
+        KeyCode::Char('u'),
+        KeyModifiers::CONTROL,
+        KeyEventKind::Press,
+    );
+    editor.handle_key(ctrl_u, &state);
+    let KeyResult::Emit(Action::SaveTask(draft)) = editor.handle_key(key(KeyCode::Enter), &state)
+    else {
+        panic!("expected SaveTask");
+    };
+    assert_eq!(draft.due, None);
 }

@@ -1,12 +1,16 @@
 use crate::{
     action::Action,
-    domain::{AppState, Priority, Status, ViewMode},
+    domain::{
+        AppState, Priority, Status, ViewMode,
+        due::{relative_label, urgency},
+    },
     ui::{
         Component, KeyResult, TaskView,
         keys::{Chords, on_selected, task_command},
         theme::Theme,
     },
 };
+use chrono::Local;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
@@ -16,8 +20,9 @@ use ratatui::{
 };
 
 const PAGE: usize = 5;
-/// Highlight symbol, status, priority and the three column gaps.
-const FIXED_COLS: usize = 2 + 2 + 7 + 3;
+/// Highlight symbol, status, due, priority and the four column gaps.
+const DUE_WIDTH: usize = 9;
+const FIXED_COLS: usize = 2 + 2 + DUE_WIDTH + 7 + 4;
 const MIN_TITLE: usize = 12;
 
 fn ellipsize(text: &str, width: usize) -> String {
@@ -240,6 +245,7 @@ impl Component for TableComponent {
             .saturating_sub(FIXED_COLS + tags_width)
             .max(MIN_TITLE);
 
+        let today = Local::now().date_naive();
         let mut rows: Vec<Row> = Vec::with_capacity(visible_indices.len());
         for (row, &real_idx) in visible_indices.iter().enumerate() {
             let item = &state.items[real_idx];
@@ -254,6 +260,14 @@ impl Component for TableComponent {
                 Style::default()
             };
             let title_cell = Cell::from(ellipsize(&item.title, title_width)).style(title_style);
+
+            let due_cell = match item.due {
+                Some(due) if !is_complete => {
+                    Cell::from(ellipsize(&relative_label(due, today), DUE_WIDTH))
+                        .style(Theme::due(urgency(due, today)))
+                }
+                _ => Cell::from(""),
+            };
 
             let prio_cell = if is_complete {
                 Cell::from("")
@@ -271,6 +285,7 @@ impl Component for TableComponent {
             rows.push(Row::new(vec![
                 status_cell,
                 title_cell,
+                due_cell,
                 prio_cell,
                 tags_cell,
             ]));
@@ -281,6 +296,7 @@ impl Component for TableComponent {
             [
                 Constraint::Length(2),
                 Constraint::Min(MIN_TITLE as u16),
+                Constraint::Length(DUE_WIDTH as u16),
                 Constraint::Length(7),
                 Constraint::Length(tags_width as u16),
             ],

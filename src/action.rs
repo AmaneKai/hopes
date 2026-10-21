@@ -2,6 +2,7 @@ use crate::{
     domain::{FocusPane, NavSection, Priority, Status},
     systems::sync::SyncStatus,
 };
+use chrono::NaiveDate;
 
 #[derive(Clone, Debug)]
 pub enum NavTarget {
@@ -16,6 +17,7 @@ pub struct TaskDraft {
     pub description: String,
     pub priority: Priority,
     pub tags: Vec<String>,
+    pub due: Option<NaiveDate>,
     pub status: Status,
 }
 

@@ -1,4 +1,4 @@
-use crate::domain::Priority;
+use crate::domain::{Priority, due::DueUrgency};
 use ratatui::{
     style::{Color, Modifier, Style},
     text::Span,
@@ -88,6 +88,18 @@ impl Theme {
         Style::default()
             .fg(Color::DarkGray)
             .add_modifier(Modifier::CROSSED_OUT)
+    }
+
+    #[inline(always)]
+    pub fn due(urgency: DueUrgency) -> Style {
+        match urgency {
+            DueUrgency::Overdue => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            DueUrgency::Today => Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+            DueUrgency::Soon => Style::default().fg(Color::Yellow),
+            DueUrgency::Later => Self::muted(),
+        }
     }
 
     #[inline(always)]

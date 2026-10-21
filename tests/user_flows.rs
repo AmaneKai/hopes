@@ -276,6 +276,7 @@ fn ctrl_s_saves_from_any_field() {
     s.press(KeyCode::Tab);
     s.press(KeyCode::Tab);
     s.press(KeyCode::Tab);
+    s.press(KeyCode::Tab);
     s.type_str("a, b");
     s.press_with(KeyCode::Char('s'), KeyModifiers::CONTROL);
 

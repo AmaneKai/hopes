@@ -1,12 +1,16 @@
 use crate::{
     action::Action,
-    domain::{AppState, Status, ViewMode},
+    domain::{
+        AppState, Status, ViewMode,
+        due::{relative_label, urgency},
+    },
     ui::{
         Component, KeyResult, TaskView,
         keys::{Chords, on_selected, task_command},
         theme::Theme,
     },
 };
+use chrono::Local;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
@@ -213,6 +217,7 @@ impl KanbanComponent {
             return;
         }
 
+        let today = Local::now().date_naive();
         let mut lines = Vec::with_capacity(indices.len() * 4);
         let selected_cursor = self.cursor[col_idx];
 
@@ -247,6 +252,16 @@ impl KanbanComponent {
                 lines.push(Line::from(vec![
                     Span::raw("    "),
                     Span::styled(desc_snippet, Theme::muted()),
+                ]));
+            }
+
+            if let (Some(due), false) = (item.due, item.status == Status::Complete) {
+                lines.push(Line::from(vec![
+                    Span::raw("    "),
+                    Span::styled(
+                        format!("due {}", relative_label(due, today)),
+                        Theme::due(urgency(due, today)),
+                    ),
                 ]));
             }
 

@@ -378,6 +378,7 @@ impl App {
         item.description = draft.description.clone();
         item.priority = draft.priority;
         item.tags = draft.tags.clone();
+        item.due = draft.due;
         let short = snippet(&item.title, 28);
         self.commit_change("Task updated".into(), format!("Edited \"{short}\""));
     }
@@ -387,6 +388,7 @@ impl App {
         item.description = draft.description.clone();
         item.priority = draft.priority;
         item.status = draft.status;
+        item.due = draft.due;
         let short = snippet(&draft.title, 28);
         self.state.items.push(item);
         self.commit_change("Task created".into(), format!("Created \"{short}\""));

@@ -1,4 +1,5 @@
 pub mod audit;
+pub mod due;
 pub mod item;
 pub mod priority;
 pub mod status;
@@ -9,6 +10,7 @@ pub use priority::Priority;
 pub use status::Status;
 
 use crate::systems::sync::SyncStatus;
+use chrono::{Local, NaiveDate};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -83,6 +85,7 @@ pub enum SortMode {
     Natural,
     Priority,
     Status,
+    Due,
     Title,
 }
 
@@ -92,7 +95,8 @@ impl SortMode {
         match self {
             Self::Natural => Self::Priority,
             Self::Priority => Self::Status,
-            Self::Status => Self::Title,
+            Self::Status => Self::Due,
+            Self::Due => Self::Title,
             Self::Title => Self::Natural,
         }
     }
@@ -103,6 +107,7 @@ impl SortMode {
             Self::Natural => "Natural",
             Self::Priority => "Priority",
             Self::Status => "Status",
+            Self::Due => "Due",
             Self::Title => "Title",
         }
     }
@@ -115,15 +120,17 @@ pub enum NavSection {
     InProgress,
     Complete,
     Urgent,
+    Overdue,
 }
 
 impl NavSection {
-    pub const ALL: [NavSection; 5] = [
+    pub const ALL: [NavSection; 6] = [
         NavSection::All,
         NavSection::Todo,
         NavSection::InProgress,
         NavSection::Complete,
         NavSection::Urgent,
+        NavSection::Overdue,
     ];
 
     #[inline(always)]
@@ -134,6 +141,7 @@ impl NavSection {
             Self::InProgress => "In Progress",
             Self::Complete => "Completed",
             Self::Urgent => "Urgent",
+            Self::Overdue => "Overdue",
         }
     }
 }
@@ -146,6 +154,7 @@ pub struct WorkspaceStats {
     pub complete: usize,
     pub percent: usize,
     pub urgent: usize,
+    pub overdue: usize,
     pub high: usize,
     pub medium: usize,
     pub low: usize,
@@ -255,7 +264,11 @@ impl AppState {
         let mut columns: [Vec<usize>; 3] = [Vec::new(), Vec::new(), Vec::new()];
         let mut tag_counts: HashMap<String, usize> = HashMap::new();
 
+        let today = Local::now().date_naive();
         for (i, item) in self.items.iter().enumerate() {
+            if item.is_overdue(today) {
+                stats.overdue += 1;
+            }
             count_status(&mut stats, item.status);
             count_priority(&mut stats, item.priority);
             columns[column_of(item.status)].push(i);
@@ -290,6 +303,10 @@ impl AppState {
                 indices.sort_by_key(|&i| priority_rank(self.items[i].priority));
             }
             SortMode::Status => indices.sort_by_key(|&i| column_of(self.items[i].status)),
+            SortMode::Due => indices.sort_by_key(|&i| {
+                let item = &self.items[i];
+                (item.due.is_none(), item.due)
+            }),
             SortMode::Title => indices.sort_by_key(|&i| self.items[i].title.to_lowercase()),
         }
 
@@ -297,7 +314,7 @@ impl AppState {
     }
 
     fn is_visible(&self, item: &Item) -> bool {
-        if !matches_section(self.nav_section, item) {
+        if !matches_section(self.nav_section, item, Local::now().date_naive()) {
             return false;
         }
         match &self.tag_filter {
@@ -341,13 +358,14 @@ fn priority_rank(priority: Priority) -> u8 {
     }
 }
 
-fn matches_section(section: NavSection, item: &Item) -> bool {
+fn matches_section(section: NavSection, item: &Item, today: NaiveDate) -> bool {
     match section {
         NavSection::All => true,
         NavSection::Todo => item.status == Status::Todo,
         NavSection::InProgress => item.status == Status::InProgress,
         NavSection::Complete => item.status == Status::Complete,
         NavSection::Urgent => item.priority == Priority::Urgent,
+        NavSection::Overdue => item.is_overdue(today),
     }
 }
 

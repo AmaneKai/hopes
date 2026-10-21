@@ -25,7 +25,7 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
             ("Ctrl-d / Ctrl-u", "Page down / up"),
             ("Tab", "Next pane"),
             ("v", "Switch table / board"),
-            ("s", "Cycle sort"),
+            ("s", "Cycle sort (incl. due date)"),
         ],
     ),
     (
@@ -55,6 +55,7 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
         "Editing",
         &[
             ("Tab / Ctrl-j", "Next field"),
+            ("Due field", "fri, tomorrow, +3d, 2w, oct 25"),
             ("Shift-Tab / Ctrl-k", "Previous field"),
             ("Ctrl-s", "Save"),
             ("Esc", "Normal mode, then cancel"),

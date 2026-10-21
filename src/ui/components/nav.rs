@@ -130,6 +130,7 @@ impl Component for NavComponent {
                 NavSection::InProgress => stats.in_progress,
                 NavSection::Complete => stats.complete,
                 NavSection::Urgent => stats.urgent,
+                NavSection::Overdue => stats.overdue,
             };
 
             let is_current = state.nav_section == *section && state.tag_filter.is_none();

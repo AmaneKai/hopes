@@ -1,7 +1,11 @@
 use crate::{
-    domain::{AppState, Priority},
+    domain::{
+        AppState, Priority, Status,
+        due::{full_label, relative_label, urgency},
+    },
     ui::{Component, KeyResult, theme::Theme},
 };
+use chrono::Local;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
@@ -90,6 +94,22 @@ fn draw_task_details(f: &mut Frame, state: &AppState, area: Rect, is_focused: bo
             Style::default().fg(item.priority.color()),
         )],
     ));
+    let due = match item.due {
+        Some(date) => {
+            let today = Local::now().date_naive();
+            let style = if item.status == Status::Complete {
+                Theme::muted()
+            } else {
+                Theme::due(urgency(date, today))
+            };
+            vec![
+                Span::raw(format!("{} ", full_label(date))),
+                Span::styled(format!("\u{b7} {}", relative_label(date, today)), style),
+            ]
+        }
+        None => vec![Span::styled("None", Theme::muted())],
+    };
+    lines.push(property("Due", due));
     let tags = if item.tags.is_empty() {
         vec![Span::styled("Empty", Theme::muted())]
     } else {
