@@ -49,6 +49,12 @@ cargo build --release
 ./target/release/hopes
 ```
 
+#### Smallest binary
+
+`cargo build --release` already uses size-optimized settings. For roughly 30% less on top of that,
+`scripts/build-small.sh` rebuilds the standard library for size. It needs nightly with `rust-src`
+(`rustup toolchain install nightly --component rust-src`) and keeps panic messages.
+
 ### Installation via Cargo
 
 ```bash
