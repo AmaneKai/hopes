@@ -711,3 +711,21 @@ fn completing_a_repeating_task_rolls_it_to_the_next_due_date() {
     assert_eq!(s.items()[1].status, Status::Complete);
     assert_eq!(s.items()[1].due, Some(today));
 }
+
+#[test]
+fn a_repeating_window_moves_as_a_whole() {
+    let today = chrono::Local::now().date_naive();
+    let day = chrono::Duration::days;
+    let mut show = Item::new("weekly show".into(), vec![]);
+    show.start = Some(today - day(1));
+    show.due = Some(today + day(1));
+    show.repeat = hopes::domain::Repeat::parse("weekly").unwrap();
+    let mut s = Session::with_items(vec![show]);
+
+    s.dispatch(Action::ToggleTaskStatus(0));
+    s.dispatch(Action::ToggleTaskStatus(0));
+
+    let item = &s.items()[0];
+    assert_eq!(item.due, Some(today + day(8)));
+    assert_eq!(item.start, Some(today + day(6)));
+}

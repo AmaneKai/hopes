@@ -338,3 +338,33 @@ fn an_unparseable_repeat_rule_blocks_saving() {
 
     assert!(is_handled(&editor.handle_key(key(KeyCode::Enter), &state)));
 }
+
+#[test]
+fn a_due_range_saves_both_ends_and_reloads_as_a_range() {
+    let state = state_with(Vec::new());
+    let mut editor = opened(&state, Status::Todo);
+    type_str(&mut editor, &state, "title");
+    for _ in 0..3 {
+        editor.handle_key(key(KeyCode::Tab), &state);
+    }
+    type_str(&mut editor, &state, "2026-10-25..2026-10-30");
+
+    let KeyResult::Emit(Action::SaveTask(draft)) = editor.handle_key(key(KeyCode::Enter), &state)
+    else {
+        panic!("expected SaveTask");
+    };
+    assert_eq!(draft.start, NaiveDate::from_ymd_opt(2026, 10, 25));
+    assert_eq!(draft.due, NaiveDate::from_ymd_opt(2026, 10, 30));
+
+    let mut task = Item::new("t".into(), vec![]);
+    task.start = draft.start;
+    task.due = draft.due;
+    let state = state_with(vec![task]);
+    let mut editor = EditorComponent::default();
+    editor.update(&Action::OpenEditModal(0), &state);
+    let KeyResult::Emit(Action::SaveTask(again)) = editor.handle_key(key(KeyCode::Enter), &state)
+    else {
+        panic!("expected SaveTask");
+    };
+    assert_eq!((again.start, again.due), (draft.start, draft.due));
+}

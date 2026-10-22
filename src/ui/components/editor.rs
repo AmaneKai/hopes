@@ -2,7 +2,7 @@ use crate::{
     action::{Action, TaskDraft},
     domain::{
         AppState, Priority, Repeat, Status,
-        due::{self, DueUrgency, InvalidDate, full_label, urgency},
+        due::{self, DueUrgency, InvalidDate, Window},
     },
     ui::{
         Component, KeyResult,
@@ -13,7 +13,7 @@ use crate::{
     },
     utils::textedit,
 };
-use chrono::{Local, NaiveDate};
+use chrono::Local;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
@@ -124,7 +124,11 @@ impl EditorComponent {
         self.description = item.description.clone();
         self.priority = item.priority;
         self.tags = item.tags.join(", ");
-        self.due = item.due.map(|d| d.to_string()).unwrap_or_default();
+        self.due = match (item.start, item.due) {
+            (Some(start), Some(due)) => format!("{start}..{due}"),
+            (_, Some(due)) => due.to_string(),
+            _ => String::new(),
+        };
         self.repeat = item.repeat.map(|r| r.to_string()).unwrap_or_default();
         self.field = FormField::Title;
         self.edit_idx = Some(idx);
@@ -211,9 +215,9 @@ impl EditorComponent {
         }
     }
 
-    /// `Err` when the typed due text is not a date; `Ok(None)` when it is empty.
-    fn parsed_due(&self) -> Result<Option<NaiveDate>, InvalidDate> {
-        due::parse(&self.due, Local::now().date_naive())
+    /// `Err` when the typed due text is not a date or range; `Ok(None)` when it is empty.
+    fn parsed_due(&self) -> Result<Option<Window>, InvalidDate> {
+        due::parse_window(&self.due, Local::now().date_naive())
     }
 
     fn parsed_repeat(&self) -> Result<Option<Repeat>, InvalidDate> {
@@ -225,9 +229,12 @@ impl EditorComponent {
             return None;
         }
         let repeat = self.parsed_repeat().ok()?;
-        let mut due = self.parsed_due().ok()?;
-        if due.is_none() {
-            due = repeat.map(|r| r.first_from(Local::now().date_naive()));
+        let mut window = self.parsed_due().ok()?;
+        if window.is_none() {
+            window = repeat.map(|r| Window {
+                start: None,
+                end: r.first_from(Local::now().date_naive()),
+            });
         }
         let tags = self
             .tags
@@ -241,7 +248,8 @@ impl EditorComponent {
             description: self.description.trim().to_string(),
             priority: self.priority,
             tags,
-            due,
+            due: window.map(|w| w.end),
+            start: window.and_then(|w| w.start),
             repeat,
             status: self.create_status,
         }))
@@ -454,13 +462,13 @@ impl Component for EditorComponent {
         f.render_widget(label("Due", due_focused), l);
         let hint_style = Theme::muted();
         let (preview, preview_style) = match self.parsed_due() {
-            Ok(Some(date)) => {
+            Ok(Some(window)) => {
                 let today = Local::now().date_naive();
-                let style = match urgency(date, today) {
-                    DueUrgency::Later => hint_style,
+                let style = match window.urgency(today) {
+                    DueUrgency::Later | DueUrgency::Upcoming => hint_style,
                     other => Theme::due(other),
                 };
-                (format!("\u{2192} {}", full_label(date)), style)
+                (format!("\u{2192} {}", window.full_label()), style)
             }
             Ok(None) => (String::new(), hint_style),
             Err(InvalidDate) => (
@@ -476,7 +484,7 @@ impl Component for EditorComponent {
                 &self.due,
                 cursor,
                 due_focused.then_some(anchor).flatten(),
-                "tomorrow, fri, +3d, oct 25",
+                "fri, +3d, oct 25, fri..sun",
             )),
             due_input,
         );

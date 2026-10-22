@@ -9,6 +9,8 @@ pub enum DueUrgency {
     Today,
     Soon,
     Later,
+    /// The window has not opened yet.
+    Upcoming,
 }
 
 pub fn urgency(due: NaiveDate, today: NaiveDate) -> DueUrgency {
@@ -17,6 +19,52 @@ pub fn urgency(due: NaiveDate, today: NaiveDate) -> DueUrgency {
         0 => DueUrgency::Today,
         d if d <= SOON_DAYS => DueUrgency::Soon,
         _ => DueUrgency::Later,
+    }
+}
+
+/// When a task has to be done: by `end`, and from `start` if the window opens later.
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub struct Window {
+    pub start: Option<NaiveDate>,
+    pub end: NaiveDate,
+}
+
+impl Window {
+    pub fn urgency(&self, today: NaiveDate) -> DueUrgency {
+        match self.start {
+            Some(start) if start > today => DueUrgency::Upcoming,
+            _ => urgency(self.end, today),
+        }
+    }
+
+    /// Compact label for lists: `from Sat` before the window opens, `3d left` inside a
+    /// multi-day window, otherwise the same as [`relative_label`] for the end date.
+    pub fn label(&self, today: NaiveDate) -> String {
+        match self.start {
+            Some(start) if start > today => format!("from {}", relative_label(start, today)),
+            Some(_) if self.end > today => format!("{}d left", (self.end - today).num_days()),
+            _ => relative_label(self.end, today),
+        }
+    }
+
+    /// Full dates for detail views: `Fri, Oct 23 2026` or `Oct 23 – Sun, Oct 25 2026`.
+    pub fn full_label(&self) -> String {
+        match self.start {
+            Some(start) => format!(
+                "{} \u{2013} {}",
+                start.format("%b %-d"),
+                full_label(self.end)
+            ),
+            None => full_label(self.end),
+        }
+    }
+
+    /// Shifts the window to end on `end`, keeping its length.
+    pub fn moved_to(&self, end: NaiveDate) -> Self {
+        Self {
+            start: self.start.map(|s| end - (self.end - s)),
+            end,
+        }
     }
 }
 
@@ -53,6 +101,38 @@ pub fn parse(input: &str, today: NaiveDate) -> Result<Option<NaiveDate>, Invalid
         return Ok(None);
     }
     parse_date(&text, today).map(Some).ok_or(InvalidDate)
+}
+
+/// Like [`parse`], but also accepts a range: `fri..sun`, `oct 25 - oct 30`, `mon to fri`.
+/// The end is read relative to the start, so `mon..fri` means that Monday through that Friday.
+pub fn parse_window(input: &str, today: NaiveDate) -> Result<Option<Window>, InvalidDate> {
+    let text = input.trim().to_lowercase();
+    let Some((a, b)) = split_range(&text) else {
+        return Ok(parse(&text, today)?.map(|end| Window { start: None, end }));
+    };
+    let start = parse_date(a.trim(), today).ok_or(InvalidDate)?;
+    let b = b.trim();
+    // A bare weekday may land on the start day itself (`fri..fri`), unlike a standalone `fri`.
+    let end_base = if weekday_of(b).is_some() {
+        start - Duration::days(1)
+    } else {
+        start
+    };
+    let end = parse_date(b, end_base).ok_or(InvalidDate)?;
+    if end < start {
+        return Err(InvalidDate);
+    }
+    Ok(Some(Window {
+        start: (start < end).then_some(start),
+        end,
+    }))
+}
+
+/// Splits on `..`, ` to `, or a spaced dash; bare dashes belong to ISO dates like `10-25`.
+fn split_range(text: &str) -> Option<(&str, &str)> {
+    [" to ", " - ", " \u{2013} ", ".."]
+        .iter()
+        .find_map(|sep| text.split_once(sep))
 }
 
 fn parse_date(text: &str, today: NaiveDate) -> Option<NaiveDate> {

@@ -1,7 +1,7 @@
 use chrono::NaiveDate;
 use hopes::domain::{
     AppState, Item, NavSection, SortMode, Status,
-    due::{DueUrgency, InvalidDate, parse, relative_label, urgency},
+    due::{DueUrgency, InvalidDate, Window, parse, parse_window, relative_label, urgency},
 };
 use hopes::systems::sync::SyncStatus;
 
@@ -134,4 +134,108 @@ fn due_survives_a_json_round_trip_and_old_data_still_loads() {
 
     let old = r#"{"title":"x","priority":"Medium","status":"Todo"}"#;
     assert_eq!(serde_json::from_str::<Item>(old).unwrap().due, None);
+}
+
+fn win(input: &str) -> Result<Option<Window>, InvalidDate> {
+    parse_window(input, today())
+}
+
+#[test]
+fn ranges_parse_with_the_end_read_relative_to_the_start() {
+    let w = |s: Option<NaiveDate>, e: NaiveDate| Ok(Some(Window { start: s, end: e }));
+    assert_eq!(win("fri"), w(None, day(2026, 10, 23).unwrap()));
+    assert_eq!(
+        win("fri..sun"),
+        w(day(2026, 10, 23), day(2026, 10, 25).unwrap())
+    );
+    assert_eq!(
+        win("mon to fri"),
+        w(day(2026, 10, 26), day(2026, 10, 30).unwrap())
+    );
+    assert_eq!(
+        win("oct 25 - oct 30"),
+        w(day(2026, 10, 25), day(2026, 10, 30).unwrap())
+    );
+    assert_eq!(
+        win("tomorrow..+1w"),
+        w(day(2026, 10, 22), day(2026, 10, 29).unwrap())
+    );
+    assert_eq!(
+        win("2026-10-25..2026-11-02"),
+        w(day(2026, 10, 25), day(2026, 11, 2).unwrap())
+    );
+    assert_eq!(win("10-25"), w(None, day(2026, 10, 25).unwrap()));
+    // A range that collapses to one day is just a deadline.
+    assert_eq!(win("fri..fri"), w(None, day(2026, 10, 23).unwrap()));
+    assert_eq!(win(""), Ok(None));
+}
+
+#[test]
+fn backwards_or_broken_ranges_are_rejected() {
+    assert_eq!(win("2026-10-30..2026-10-25"), Err(InvalidDate));
+    assert_eq!(win("fri.."), Err(InvalidDate));
+    assert_eq!(win("..fri"), Err(InvalidDate));
+    assert_eq!(win("fri..someday"), Err(InvalidDate));
+}
+
+#[test]
+fn window_labels_and_urgency() {
+    let t = today();
+    let w = Window {
+        start: day(2026, 10, 24),
+        end: day(2026, 10, 28).unwrap(),
+    };
+    assert_eq!(w.label(t), "from Sat");
+    assert_eq!(w.urgency(t), DueUrgency::Upcoming);
+
+    let open = Window {
+        start: day(2026, 10, 20),
+        end: day(2026, 10, 24).unwrap(),
+    };
+    assert_eq!(open.label(t), "3d left");
+    assert_eq!(open.urgency(t), DueUrgency::Later);
+
+    let last_day = Window {
+        start: day(2026, 10, 20),
+        end: t,
+    };
+    assert_eq!(last_day.label(t), "today");
+    assert_eq!(last_day.urgency(t), DueUrgency::Today);
+
+    let late = Window {
+        start: day(2026, 10, 10),
+        end: day(2026, 10, 18).unwrap(),
+    };
+    assert_eq!(late.label(t), "3d late");
+    assert_eq!(late.urgency(t), DueUrgency::Overdue);
+
+    assert_eq!(open.full_label(), "Oct 20 \u{2013} Sat, Oct 24 2026");
+}
+
+#[test]
+fn moving_a_window_keeps_its_length() {
+    let w = Window {
+        start: day(2026, 10, 23),
+        end: day(2026, 10, 25).unwrap(),
+    };
+    let next = w.moved_to(day(2026, 10, 30).unwrap());
+    assert_eq!(next.start, day(2026, 10, 28));
+    assert_eq!(
+        Window {
+            start: None,
+            end: w.end
+        }
+        .moved_to(next.end)
+        .start,
+        None
+    );
+}
+
+#[test]
+fn start_is_stored_only_when_set() {
+    let mut item = with_due("a", day(2026, 10, 25));
+    assert!(!serde_json::to_string(&item).unwrap().contains("start"));
+    item.start = day(2026, 10, 23);
+    let json = serde_json::to_string(&item).unwrap();
+    assert_eq!(serde_json::from_str::<Item>(&json).unwrap(), item);
 }

@@ -18,6 +18,7 @@ pub struct TaskDraft {
     pub priority: Priority,
     pub tags: Vec<String>,
     pub due: Option<NaiveDate>,
+    pub start: Option<NaiveDate>,
     pub repeat: Option<Repeat>,
     pub status: Status,
 }

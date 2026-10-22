@@ -2,7 +2,8 @@ use crate::{
     action::{Action, NavTarget, TaskDraft},
     config::{Backend, Config},
     domain::{
-        AppState, FocusPane, Item, NavSection, Priority, Status, ViewMode, due::relative_label,
+        AppState, FocusPane, Item, NavSection, Priority, Status, ViewMode,
+        due::{Window, relative_label},
         snippet,
     },
     event::{Event, EventHandler},
@@ -382,6 +383,7 @@ impl App {
         item.priority = draft.priority;
         item.tags = draft.tags.clone();
         item.due = draft.due;
+        item.start = draft.start;
         item.repeat = draft.repeat;
         let short = snippet(&item.title, 28);
         self.commit_change("Task updated".into(), format!("Edited \"{short}\""));
@@ -393,6 +395,7 @@ impl App {
         item.priority = draft.priority;
         item.status = draft.status;
         item.due = draft.due;
+        item.start = draft.start;
         item.repeat = draft.repeat;
         let short = snippet(&draft.title, 28);
         self.state.items.push(item);
@@ -483,8 +486,13 @@ impl App {
             return false;
         };
         let today = chrono::Local::now().date_naive();
-        let next = repeat.next_after(item.due.unwrap_or(today), today);
+        let window = item.window().unwrap_or(Window {
+            start: None,
+            end: today,
+        });
+        let next = repeat.next_after(window.end, today);
         item.due = Some(next);
+        item.start = window.moved_to(next).start;
         item.status = Status::Todo;
         let short = snippet(&item.title, 28);
         let when = relative_label(next, today);

@@ -98,7 +98,7 @@ impl Theme {
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
             DueUrgency::Soon => Style::default().fg(Color::Yellow),
-            DueUrgency::Later => Self::muted(),
+            DueUrgency::Later | DueUrgency::Upcoming => Self::muted(),
         }
     }
 

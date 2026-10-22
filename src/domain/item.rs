@@ -1,4 +1,4 @@
-use super::{priority::Priority, repeat::Repeat, status::Status};
+use super::{due::Window, priority::Priority, repeat::Repeat, status::Status};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +13,9 @@ pub struct Item {
     pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub due: Option<NaiveDate>,
+    /// Day the task becomes workable; only meaningful together with `due`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<NaiveDate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repeat: Option<Repeat>,
 }
@@ -26,8 +29,16 @@ impl Item {
             status: Status::Todo,
             tags,
             due: None,
+            start: None,
             repeat: None,
         }
+    }
+
+    pub fn window(&self) -> Option<Window> {
+        Some(Window {
+            start: self.start,
+            end: self.due?,
+        })
     }
 
     /// Open tasks past their due date.

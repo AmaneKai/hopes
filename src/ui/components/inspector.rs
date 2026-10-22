@@ -1,8 +1,5 @@
 use crate::{
-    domain::{
-        AppState, Priority, Status,
-        due::{full_label, relative_label, urgency},
-    },
+    domain::{AppState, Priority, Status},
     ui::{Component, KeyResult, theme::Theme},
 };
 use chrono::Local;
@@ -94,17 +91,17 @@ fn draw_task_details(f: &mut Frame, state: &AppState, area: Rect, is_focused: bo
             Style::default().fg(item.priority.color()),
         )],
     ));
-    let due = match item.due {
-        Some(date) => {
+    let due = match item.window() {
+        Some(window) => {
             let today = Local::now().date_naive();
             let style = if item.status == Status::Complete {
                 Theme::muted()
             } else {
-                Theme::due(urgency(date, today))
+                Theme::due(window.urgency(today))
             };
             vec![
-                Span::raw(format!("{} ", full_label(date))),
-                Span::styled(format!("\u{b7} {}", relative_label(date, today)), style),
+                Span::raw(format!("{} ", window.full_label())),
+                Span::styled(format!("\u{b7} {}", window.label(today)), style),
             ]
         }
         None => vec![Span::styled("None", Theme::muted())],

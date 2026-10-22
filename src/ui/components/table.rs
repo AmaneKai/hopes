@@ -1,9 +1,6 @@
 use crate::{
     action::Action,
-    domain::{
-        AppState, Priority, Status, ViewMode,
-        due::{relative_label, urgency},
-    },
+    domain::{AppState, Priority, Status, ViewMode, due::DueUrgency},
     ui::{
         Component, KeyResult, TaskView,
         keys::{Chords, on_selected, task_command},
@@ -21,8 +18,8 @@ use ratatui::{
 
 const PAGE: usize = 5;
 /// Highlight symbol, status, due, priority and the four column gaps.
-const DUE_WIDTH: usize = 11;
-const FIXED_COLS: usize = 2 + 2 + DUE_WIDTH + 7 + 4;
+const MAX_DUE_WIDTH: usize = 16;
+const FIXED_COLS: usize = 2 + 2 + 7 + 4;
 const MIN_TITLE: usize = 12;
 
 fn ellipsize(text: &str, width: usize) -> String {
@@ -241,11 +238,34 @@ impl Component for TableComponent {
             .max()
             .unwrap_or(0)
             .min(inner_width / 3);
+        let today = Local::now().date_naive();
+        let due_texts: Vec<Option<(String, DueUrgency)>> = visible_indices
+            .iter()
+            .map(|&i| {
+                let item = &state.items[i];
+                let window = item.window().filter(|_| item.status != Status::Complete)?;
+                let mark = if item.repeat.is_some() {
+                    "\u{21bb} "
+                } else {
+                    ""
+                };
+                Some((
+                    format!("{mark}{}", window.label(today)),
+                    window.urgency(today),
+                ))
+            })
+            .collect();
+        let due_width = due_texts
+            .iter()
+            .flatten()
+            .map(|(text, _)| text.chars().count())
+            .max()
+            .unwrap_or(0)
+            .min(MAX_DUE_WIDTH);
         let title_width = inner_width
-            .saturating_sub(FIXED_COLS + tags_width)
+            .saturating_sub(FIXED_COLS + tags_width + due_width)
             .max(MIN_TITLE);
 
-        let today = Local::now().date_naive();
         let mut rows: Vec<Row> = Vec::with_capacity(visible_indices.len());
         for (row, &real_idx) in visible_indices.iter().enumerate() {
             let item = &state.items[real_idx];
@@ -261,17 +281,11 @@ impl Component for TableComponent {
             };
             let title_cell = Cell::from(ellipsize(&item.title, title_width)).style(title_style);
 
-            let due_cell = match item.due {
-                Some(due) if !is_complete => {
-                    let mark = if item.repeat.is_some() {
-                        "\u{21bb} "
-                    } else {
-                        ""
-                    };
-                    let text = format!("{mark}{}", relative_label(due, today));
-                    Cell::from(ellipsize(&text, DUE_WIDTH)).style(Theme::due(urgency(due, today)))
+            let due_cell = match &due_texts[row] {
+                Some((text, urgency)) => {
+                    Cell::from(ellipsize(text, due_width)).style(Theme::due(*urgency))
                 }
-                _ => Cell::from(""),
+                None => Cell::from(""),
             };
 
             let prio_cell = if is_complete {
@@ -301,7 +315,7 @@ impl Component for TableComponent {
             [
                 Constraint::Length(2),
                 Constraint::Min(MIN_TITLE as u16),
-                Constraint::Length(DUE_WIDTH as u16),
+                Constraint::Length(due_width as u16),
                 Constraint::Length(7),
                 Constraint::Length(tags_width as u16),
             ],

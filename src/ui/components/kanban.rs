@@ -1,9 +1,6 @@
 use crate::{
     action::Action,
-    domain::{
-        AppState, Status, ViewMode,
-        due::{relative_label, urgency},
-    },
+    domain::{AppState, Status, ViewMode, due::DueUrgency},
     ui::{
         Component, KeyResult, TaskView,
         keys::{Chords, on_selected, task_command},
@@ -255,19 +252,21 @@ impl KanbanComponent {
                 ]));
             }
 
-            if let (Some(due), false) = (item.due, item.status == Status::Complete) {
+            if let (Some(window), false) = (item.window(), item.status == Status::Complete) {
+                let urgency = window.urgency(today);
+                let when = window.label(today);
+                let when = if urgency == DueUrgency::Upcoming {
+                    when
+                } else {
+                    format!("due {when}")
+                };
+                let repeat = item
+                    .repeat
+                    .map(|r| format!(" \u{21bb} {r}"))
+                    .unwrap_or_default();
                 lines.push(Line::from(vec![
                     Span::raw("    "),
-                    Span::styled(
-                        format!(
-                            "due {}{}",
-                            relative_label(due, today),
-                            item.repeat
-                                .map(|r| format!(" \u{21bb} {r}"))
-                                .unwrap_or_default()
-                        ),
-                        Theme::due(urgency(due, today)),
-                    ),
+                    Span::styled(format!("{when}{repeat}"), Theme::due(urgency)),
                 ]));
             }
 
