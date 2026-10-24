@@ -37,14 +37,15 @@ fn wait_for_exit(child: &mut Child) -> Result<(), GitError> {
     loop {
         match child.try_wait() {
             Ok(Some(_)) => return Ok(()),
-            Ok(None) if start.elapsed() > NETWORK_TIMEOUT => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(GitError::Offline);
-            }
-            Ok(None) => thread::sleep(Duration::from_millis(50)),
+            Ok(None) => {}
             Err(e) => return Err(GitError::Failed(e.to_string())),
         }
+        if start.elapsed() > NETWORK_TIMEOUT {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(GitError::Offline);
+        }
+        thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -65,35 +66,42 @@ fn run(dir: &Path, args: &[&str]) -> Result<Output, GitError> {
 }
 
 fn is_offline_stderr(stderr: &str) -> bool {
-    let s = stderr.to_lowercase();
-    s.contains("could not resolve host")
-        || s.contains("unable to access")
-        || s.contains("connection timed out")
-        || s.contains("network is unreachable")
-        || s.contains("could not read from remote repository")
-        || s.contains("no route to host")
+    const OFFLINE_MESSAGES: [&str; 6] = [
+        "could not resolve host",
+        "unable to access",
+        "connection timed out",
+        "network is unreachable",
+        "could not read from remote repository",
+        "no route to host",
+    ];
+    let stderr = stderr.to_lowercase();
+    for message in OFFLINE_MESSAGES {
+        if stderr.contains(message) {
+            return true;
+        }
+    }
+    false
 }
 
 pub fn has_unsynced_changes(dir: &Path, remote: &str, branch: &str) -> bool {
-    let dirty = run(dir, &["status", "--porcelain", "--", "items.json"])
-        .map(|o| !o.stdout.is_empty())
-        .unwrap_or(false);
-    if dirty {
+    if let Ok(status) = run(dir, &["status", "--porcelain", "--", "items.json"])
+        && !status.stdout.is_empty()
+    {
         return true;
     }
-    run(
-        dir,
-        &["rev-list", "--count", &format!("{remote}/{branch}..HEAD")],
-    )
-    .ok()
-    .filter(|o| o.status.success())
-    .and_then(|o| {
-        String::from_utf8_lossy(&o.stdout)
-            .trim()
-            .parse::<u32>()
-            .ok()
-    })
-    .is_some_and(|n| n > 0)
+
+    let range = format!("{remote}/{branch}..HEAD");
+    let Ok(output) = run(dir, &["rev-list", "--count", &range]) else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let count = String::from_utf8_lossy(&output.stdout);
+    match count.trim().parse::<u32>() {
+        Ok(ahead) => ahead > 0,
+        Err(_) => false,
+    }
 }
 
 pub fn pull_rebase(dir: &Path, remote: &str, branch: &str) -> Result<(), GitError> {
@@ -151,10 +159,10 @@ pub fn resolve_conflict_keep_remote(
     let _ = run(dir, &["rebase", "--abort"]);
 
     let items_path = dir.join("items.json");
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let timestamp = match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(elapsed) => elapsed.as_secs(),
+        Err(_) => 0,
+    };
     let backup_path = dir.join(format!("items.json.local-backup-{timestamp}"));
     let _ = fs::copy(&items_path, &backup_path);
 

@@ -15,12 +15,12 @@ pub struct ExecStore {
 impl ExecStore {
     pub fn new(dir: PathBuf, command: Vec<String>) -> io::Result<Self> {
         let mut parts = command.into_iter();
-        let program = parts.next().ok_or_else(|| {
-            io::Error::new(
+        let Some(program) = parts.next() else {
+            return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "storage.command is required for the exec backend",
-            )
-        })?;
+            ));
+        };
         Ok(Self {
             dir,
             program,

@@ -10,6 +10,14 @@ use crate::{action::Action, domain::AppState};
 use crossterm::event::KeyEvent;
 use ratatui::{Frame, layout::Rect};
 
+pub fn hashtags(tags: &[String], separator: &str) -> String {
+    let mut labels = Vec::new();
+    for tag in tags {
+        labels.push(format!("#{tag}"));
+    }
+    labels.join(separator)
+}
+
 pub enum KeyResult {
     Ignored,
     Handled,

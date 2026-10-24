@@ -99,52 +99,19 @@ pub fn draw_hints(f: &mut Frame, area: Rect, state: &AppState, ctx: &FooterCtx) 
             }
             spans
         }
-        AppMode::Creating | AppMode::Editing
-            if editing.is_some_and(|i| i.visual_anchor.is_some()) =>
-        {
-            vec![
-                Span::styled("h/j/k/l/w/b/e/0/$", Theme::shortcut_key()),
-                Span::styled(":Extend ", Theme::shortcut_desc()),
-                Span::styled("d/x", Theme::shortcut_key()),
-                Span::styled(":Cut ", Theme::shortcut_desc()),
-                Span::styled("y", Theme::shortcut_key()),
-                Span::styled(":Yank ", Theme::shortcut_desc()),
-                Span::styled("c", Theme::shortcut_key()),
-                Span::styled(":Change ", Theme::shortcut_desc()),
-                Span::styled("v / <Esc>", Theme::shortcut_key()),
-                Span::styled(":Exit Visual", Theme::shortcut_desc()),
-            ]
+        AppMode::Creating | AppMode::Editing => {
+            let (visual, normal) = match editing {
+                Some(input) => (input.visual_anchor.is_some(), !input.insert),
+                None => (false, false),
+            };
+            if visual {
+                visual_hints()
+            } else if normal {
+                normal_mode_hints()
+            } else {
+                insert_hints()
+            }
         }
-        AppMode::Creating | AppMode::Editing if editing.is_some_and(|i| !i.insert) => vec![
-            Span::styled("h/j/k/l", Theme::shortcut_key()),
-            Span::styled(":Move ", Theme::shortcut_desc()),
-            Span::styled("w/b/e", Theme::shortcut_key()),
-            Span::styled(":Word ", Theme::shortcut_desc()),
-            Span::styled("0/$", Theme::shortcut_key()),
-            Span::styled(":Line ", Theme::shortcut_desc()),
-            Span::styled("v", Theme::shortcut_key()),
-            Span::styled(":Visual ", Theme::shortcut_desc()),
-            Span::styled("x/dd/D", Theme::shortcut_key()),
-            Span::styled(":Delete ", Theme::shortcut_desc()),
-            Span::styled("p/P", Theme::shortcut_key()),
-            Span::styled(":Paste ", Theme::shortcut_desc()),
-            Span::styled("i/a/I/A/o", Theme::shortcut_key()),
-            Span::styled(":Insert ", Theme::shortcut_desc()),
-            Span::styled("<Esc>", Theme::shortcut_key()),
-            Span::styled(":Cancel", Theme::shortcut_desc()),
-        ],
-        AppMode::Creating | AppMode::Editing => vec![
-            Span::styled("<Tab>/<C-j/k>", Theme::shortcut_key()),
-            Span::styled(":Next Field ", Theme::shortcut_desc()),
-            Span::styled("<Enter>/<C-s>", Theme::shortcut_key()),
-            Span::styled(":Save ", Theme::shortcut_desc()),
-            Span::styled("<C-w>", Theme::shortcut_key()),
-            Span::styled(":Del Word ", Theme::shortcut_desc()),
-            Span::styled("<C-u>", Theme::shortcut_key()),
-            Span::styled(":Clear ", Theme::shortcut_desc()),
-            Span::styled("<Esc>", Theme::shortcut_key()),
-            Span::styled(":Normal Mode / Cancel", Theme::shortcut_desc()),
-        ],
         AppMode::Filtering | AppMode::Command => return,
         AppMode::Help => vec![
             Span::styled("<Esc> / ? / q / <Enter>", Theme::shortcut_key()),
@@ -156,4 +123,55 @@ pub fn draw_hints(f: &mut Frame, area: Rect, state: &AppState, ctx: &FooterCtx) 
         Paragraph::new(Line::from(spans)).alignment(Alignment::Left),
         area,
     );
+}
+
+fn visual_hints() -> Vec<Span<'static>> {
+    vec![
+        Span::styled("h/j/k/l/w/b/e/0/$", Theme::shortcut_key()),
+        Span::styled(":Extend ", Theme::shortcut_desc()),
+        Span::styled("d/x", Theme::shortcut_key()),
+        Span::styled(":Cut ", Theme::shortcut_desc()),
+        Span::styled("y", Theme::shortcut_key()),
+        Span::styled(":Yank ", Theme::shortcut_desc()),
+        Span::styled("c", Theme::shortcut_key()),
+        Span::styled(":Change ", Theme::shortcut_desc()),
+        Span::styled("v / <Esc>", Theme::shortcut_key()),
+        Span::styled(":Exit Visual", Theme::shortcut_desc()),
+    ]
+}
+
+fn normal_mode_hints() -> Vec<Span<'static>> {
+    vec![
+        Span::styled("h/j/k/l", Theme::shortcut_key()),
+        Span::styled(":Move ", Theme::shortcut_desc()),
+        Span::styled("w/b/e", Theme::shortcut_key()),
+        Span::styled(":Word ", Theme::shortcut_desc()),
+        Span::styled("0/$", Theme::shortcut_key()),
+        Span::styled(":Line ", Theme::shortcut_desc()),
+        Span::styled("v", Theme::shortcut_key()),
+        Span::styled(":Visual ", Theme::shortcut_desc()),
+        Span::styled("x/dd/D", Theme::shortcut_key()),
+        Span::styled(":Delete ", Theme::shortcut_desc()),
+        Span::styled("p/P", Theme::shortcut_key()),
+        Span::styled(":Paste ", Theme::shortcut_desc()),
+        Span::styled("i/a/I/A/o", Theme::shortcut_key()),
+        Span::styled(":Insert ", Theme::shortcut_desc()),
+        Span::styled("<Esc>", Theme::shortcut_key()),
+        Span::styled(":Cancel", Theme::shortcut_desc()),
+    ]
+}
+
+fn insert_hints() -> Vec<Span<'static>> {
+    vec![
+        Span::styled("<Tab>/<C-j/k>", Theme::shortcut_key()),
+        Span::styled(":Next Field ", Theme::shortcut_desc()),
+        Span::styled("<Enter>/<C-s>", Theme::shortcut_key()),
+        Span::styled(":Save ", Theme::shortcut_desc()),
+        Span::styled("<C-w>", Theme::shortcut_key()),
+        Span::styled(":Del Word ", Theme::shortcut_desc()),
+        Span::styled("<C-u>", Theme::shortcut_key()),
+        Span::styled(":Clear ", Theme::shortcut_desc()),
+        Span::styled("<Esc>", Theme::shortcut_key()),
+        Span::styled(":Normal Mode / Cancel", Theme::shortcut_desc()),
+    ]
 }

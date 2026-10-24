@@ -24,17 +24,22 @@ pub trait Storage {
 }
 
 pub fn default_dir() -> PathBuf {
-    let mut dir = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."));
+    let mut dir = match dirs::data_local_dir() {
+        Some(dir) => dir,
+        None => PathBuf::from("."),
+    };
     dir.push("hopes");
     dir
 }
 
 pub fn open(cfg: &StorageConfig, fallback_dir: Option<&PathBuf>) -> io::Result<Box<dyn Storage>> {
-    let dir = cfg
-        .dir
-        .clone()
-        .or_else(|| fallback_dir.cloned())
-        .unwrap_or_else(default_dir);
+    let dir = if let Some(dir) = &cfg.dir {
+        dir.clone()
+    } else if let Some(dir) = fallback_dir {
+        dir.clone()
+    } else {
+        default_dir()
+    };
     Ok(match cfg.backend {
         Backend::Json => Box::new(JsonStore::at_dir(dir)),
         Backend::Exec => Box::new(ExecStore::new(dir, cfg.command.clone())?),

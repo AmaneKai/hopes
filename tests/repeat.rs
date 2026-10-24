@@ -45,7 +45,6 @@ fn display_text_parses_back_to_the_same_rule() {
 #[test]
 fn next_occurrence_follows_the_old_due_date_not_today() {
     let weekly = rule("weekly");
-    // Fri Oct 23 done on time, early, and on the day itself.
     assert_eq!(
         weekly.next_after(d(2026, 10, 23), d(2026, 10, 23)),
         d(2026, 10, 30)
@@ -54,7 +53,6 @@ fn next_occurrence_follows_the_old_due_date_not_today() {
         weekly.next_after(d(2026, 10, 23), d(2026, 10, 20)),
         d(2026, 10, 30)
     );
-    // Done late: skip the missed cycle but stay on the same weekday.
     assert_eq!(
         weekly.next_after(d(2026, 10, 23), d(2026, 11, 5)),
         d(2026, 11, 6)

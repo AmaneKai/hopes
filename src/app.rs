@@ -77,11 +77,13 @@ impl Default for App {
 impl App {
     pub fn new() -> Self {
         let config = Config::load();
-        let store =
-            storage::open(&config.storage, config.sync.data_dir.as_ref()).unwrap_or_else(|e| {
+        let store = match storage::open(&config.storage, config.sync.data_dir.as_ref()) {
+            Ok(store) => store,
+            Err(e) => {
                 eprintln!("hopes: {e}");
                 std::process::exit(1);
-            });
+            }
+        };
         let sync_engine = SyncEngine::spawn(
             store.data_dir().to_path_buf(),
             config.sync.remote.clone(),
@@ -476,8 +478,6 @@ impl App {
         );
     }
 
-    /// Completing a repeating task sends it back to To Do with its next due date.
-    /// Returns false (and changes nothing) when `to` is not Complete or the task doesn't repeat.
     fn roll_if_repeating(&mut self, idx: usize, to: Status) -> bool {
         let Some(item) = self.state.items.get_mut(idx) else {
             return false;
@@ -554,7 +554,10 @@ impl App {
     }
 
     fn cycle_tag_filter(&mut self) {
-        let tags: Vec<String> = self.state.tags().iter().map(|(t, _)| t.clone()).collect();
+        let mut tags: Vec<String> = Vec::new();
+        for (tag, _) in self.state.tags() {
+            tags.push(tag.clone());
+        }
         if tags.is_empty() {
             self.state.tag_filter = None;
             self.state.set_status("No tags available to filter");
@@ -563,10 +566,10 @@ impl App {
 
         let next = match &self.state.tag_filter {
             None => Some(&tags[0]),
-            Some(curr) => {
-                let curr_clean = curr.strip_prefix('#').unwrap_or(curr);
-                match tags.iter().position(|t| t == curr_clean) {
-                    Some(idx) => tags.get(idx + 1),
+            Some(current) => {
+                let current = current.strip_prefix('#').unwrap_or(current);
+                match tags.iter().position(|tag| tag == current) {
+                    Some(index) => tags.get(index + 1),
                     None => Some(&tags[0]),
                 }
             }
@@ -696,25 +699,22 @@ impl App {
         header::draw_header(f, &self.state, screen.header);
         layout::draw_rule(f, screen.rule);
 
-        // Panes that don't fit are never dropped: the focused one takes over the main area.
         let body = layout::split_body(screen.body);
         if let Some(area) = body.sidebar {
             self.nav
                 .render(f, area, &self.state, focus == FocusPane::Nav);
         }
-        match focus {
-            FocusPane::Nav if body.sidebar.is_none() => {
-                self.nav.render(f, body.main, &self.state, true);
-            }
-            FocusPane::Inspector if body.inspector.is_none() => {
-                self.inspector.render(f, body.main, &self.state, true);
-            }
-            _ => {
-                let main_focused = focus == FocusPane::Main;
-                match self.state.view_mode {
-                    ViewMode::Table => self.table.render(f, body.main, &self.state, main_focused),
-                    ViewMode::Kanban => self.kanban.render(f, body.main, &self.state, main_focused),
-                }
+        let nav_takes_main = focus == FocusPane::Nav && body.sidebar.is_none();
+        let inspector_takes_main = focus == FocusPane::Inspector && body.inspector.is_none();
+        if nav_takes_main {
+            self.nav.render(f, body.main, &self.state, true);
+        } else if inspector_takes_main {
+            self.inspector.render(f, body.main, &self.state, true);
+        } else {
+            let main_focused = focus == FocusPane::Main;
+            match self.state.view_mode {
+                ViewMode::Table => self.table.render(f, body.main, &self.state, main_focused),
+                ViewMode::Kanban => self.kanban.render(f, body.main, &self.state, main_focused),
             }
         }
         if let Some(area) = body.inspector {

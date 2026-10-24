@@ -5,7 +5,6 @@ use hopes::domain::{
 };
 use hopes::systems::sync::SyncStatus;
 
-/// A Wednesday.
 fn today() -> NaiveDate {
     NaiveDate::from_ymd_opt(2026, 10, 21).unwrap()
 }
@@ -165,7 +164,6 @@ fn ranges_parse_with_the_end_read_relative_to_the_start() {
         w(day(2026, 10, 25), day(2026, 11, 2).unwrap())
     );
     assert_eq!(win("10-25"), w(None, day(2026, 10, 25).unwrap()));
-    // A range that collapses to one day is just a deadline.
     assert_eq!(win("fri..fri"), w(None, day(2026, 10, 23).unwrap()));
     assert_eq!(win(""), Ok(None));
 }

@@ -1,6 +1,5 @@
 use chrono::{Datelike, Duration, NaiveDate, Weekday};
 
-/// Days ahead that still count as "soon".
 pub const SOON_DAYS: i64 = 2;
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
@@ -9,20 +8,18 @@ pub enum DueUrgency {
     Today,
     Soon,
     Later,
-    /// The window has not opened yet.
     Upcoming,
 }
 
 pub fn urgency(due: NaiveDate, today: NaiveDate) -> DueUrgency {
     match (due - today).num_days() {
-        d if d < 0 => DueUrgency::Overdue,
+        ..=-1 => DueUrgency::Overdue,
         0 => DueUrgency::Today,
-        d if d <= SOON_DAYS => DueUrgency::Soon,
+        1..=SOON_DAYS => DueUrgency::Soon,
         _ => DueUrgency::Later,
     }
 }
 
-/// When a task has to be done: by `end`, and from `start` if the window opens later.
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub struct Window {
     pub start: Option<NaiveDate>,
@@ -31,23 +28,26 @@ pub struct Window {
 
 impl Window {
     pub fn urgency(&self, today: NaiveDate) -> DueUrgency {
-        match self.start {
-            Some(start) if start > today => DueUrgency::Upcoming,
-            _ => urgency(self.end, today),
+        if let Some(start) = self.start
+            && start > today
+        {
+            return DueUrgency::Upcoming;
         }
+        urgency(self.end, today)
     }
 
-    /// Compact label for lists: `from Sat` before the window opens, `3d left` inside a
-    /// multi-day window, otherwise the same as [`relative_label`] for the end date.
     pub fn label(&self, today: NaiveDate) -> String {
-        match self.start {
-            Some(start) if start > today => format!("from {}", relative_label(start, today)),
-            Some(_) if self.end > today => format!("{}d left", (self.end - today).num_days()),
-            _ => relative_label(self.end, today),
+        if let Some(start) = self.start {
+            if start > today {
+                return format!("from {}", relative_label(start, today));
+            }
+            if self.end > today {
+                return format!("{}d left", (self.end - today).num_days());
+            }
         }
+        relative_label(self.end, today)
     }
 
-    /// Full dates for detail views: `Fri, Oct 23 2026` or `Oct 23 – Sun, Oct 25 2026`.
     pub fn full_label(&self) -> String {
         match self.start {
             Some(start) => format!(
@@ -59,42 +59,41 @@ impl Window {
         }
     }
 
-    /// Shifts the window to end on `end`, keeping its length.
     pub fn moved_to(&self, end: NaiveDate) -> Self {
         Self {
-            start: self.start.map(|s| end - (self.end - s)),
+            start: self.start.map(|start| end - (self.end - start)),
             end,
         }
     }
 }
 
-/// Compact label for lists: `today`, `tomorrow`, `3d`, `2d late`, `Fri`, `Oct 25`.
 pub fn relative_label(due: NaiveDate, today: NaiveDate) -> String {
     let days = (due - today).num_days();
     match days {
-        0 => "today".into(),
-        1 => "tomorrow".into(),
-        -1 => "yesterday".into(),
-        d if d < 0 => format!("{}d late", -d),
+        ..=-2 => format!("{}d late", -days),
+        -1 => "yesterday".to_string(),
+        0 => "today".to_string(),
+        1 => "tomorrow".to_string(),
         2..=6 => due.format("%a").to_string(),
-        _ if due.year() == today.year() => due.format("%b %-d").to_string(),
-        _ => due.format("%b %-d %Y").to_string(),
+        7.. => far_label(due, today),
     }
 }
 
-/// Full date for detail views: `Fri, Oct 24 2026`.
+fn far_label(due: NaiveDate, today: NaiveDate) -> String {
+    if due.year() == today.year() {
+        due.format("%b %-d").to_string()
+    } else {
+        due.format("%b %-d %Y").to_string()
+    }
+}
+
 pub fn full_label(due: NaiveDate) -> String {
     due.format("%a, %b %-d %Y").to_string()
 }
 
-/// The typed text is not a recognisable date.
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub struct InvalidDate;
 
-/// Parses free-form input relative to `today`. Empty input is `Ok(None)` (no due date).
-///
-/// Accepts `today`, `tomorrow`, `eow`, `eom`, weekdays (`fri`, `next mon`), offsets
-/// (`+3d`, `2w`, `in 3 days`, `1m`), ISO dates (`2026-10-25`), and `oct 25` / `25 oct` / `10/25`.
 pub fn parse(input: &str, today: NaiveDate) -> Result<Option<NaiveDate>, InvalidDate> {
     let text = input.trim().to_lowercase();
     if text.is_empty() || matches!(text.as_str(), "none" | "clear" | "-") {
@@ -103,36 +102,42 @@ pub fn parse(input: &str, today: NaiveDate) -> Result<Option<NaiveDate>, Invalid
     parse_date(&text, today).map(Some).ok_or(InvalidDate)
 }
 
-/// Like [`parse`], but also accepts a range: `fri..sun`, `oct 25 - oct 30`, `mon to fri`.
-/// The end is read relative to the start, so `mon..fri` means that Monday through that Friday.
 pub fn parse_window(input: &str, today: NaiveDate) -> Result<Option<Window>, InvalidDate> {
     let text = input.trim().to_lowercase();
-    let Some((a, b)) = split_range(&text) else {
-        return Ok(parse(&text, today)?.map(|end| Window { start: None, end }));
+
+    let Some((start_text, end_text)) = split_range(&text) else {
+        return match parse(&text, today)? {
+            Some(end) => Ok(Some(Window { start: None, end })),
+            None => Ok(None),
+        };
     };
-    let start = parse_date(a.trim(), today).ok_or(InvalidDate)?;
-    let b = b.trim();
-    // A bare weekday may land on the start day itself (`fri..fri`), unlike a standalone `fri`.
-    let end_base = if weekday_of(b).is_some() {
+
+    let start = parse_date(start_text.trim(), today).ok_or(InvalidDate)?;
+    let end_text = end_text.trim();
+
+    let end_base = if weekday_of(end_text).is_some() {
         start - Duration::days(1)
     } else {
         start
     };
-    let end = parse_date(b, end_base).ok_or(InvalidDate)?;
+
+    let end = parse_date(end_text, end_base).ok_or(InvalidDate)?;
+
     if end < start {
         return Err(InvalidDate);
     }
-    Ok(Some(Window {
-        start: (start < end).then_some(start),
-        end,
-    }))
+
+    let start = if start < end { Some(start) } else { None };
+    Ok(Some(Window { start, end }))
 }
 
-/// Splits on `..`, ` to `, or a spaced dash; bare dashes belong to ISO dates like `10-25`.
 fn split_range(text: &str) -> Option<(&str, &str)> {
-    [" to ", " - ", " \u{2013} ", ".."]
-        .iter()
-        .find_map(|sep| text.split_once(sep))
+    for separator in [" to ", " - ", " \u{2013} ", ".."] {
+        if let Some(parts) = text.split_once(separator) {
+            return Some(parts);
+        }
+    }
+    None
 }
 
 fn parse_date(text: &str, today: NaiveDate) -> Option<NaiveDate> {
@@ -154,55 +159,61 @@ fn parse_date(text: &str, today: NaiveDate) -> Option<NaiveDate> {
         .filter(|w| !w.is_empty())
         .collect();
 
-    let (next, rest) = match words.as_slice() {
-        ["next" | "this", rest @ ..] => (text.starts_with("next"), rest),
-        all => (false, all),
+    let next = text.starts_with("next");
+    let weekday_words = match words.as_slice() {
+        ["next" | "this", rest @ ..] => rest,
+        all => all,
     };
 
-    if let [word] = rest
+    let is_modified = weekday_words.len() < words.len();
+    if let [word] = weekday_words
         && let Some(weekday) = weekday_of(word)
     {
-        return Some(upcoming(today, weekday, next));
+        return Some(upcoming(today, weekday, is_modified && next));
     }
 
-    parse_offset(text, today)
-        .or_else(|| parse_month_day(&words, today))
-        .or_else(|| parse_numeric_month_day(text, today))
+    if let Some(date) = parse_offset(text, today) {
+        return Some(date);
+    }
+
+    if let Some(date) = parse_month_day(&words, today) {
+        return Some(date);
+    }
+
+    parse_numeric_month_day(text, today)
 }
 
-fn weekday_of(word: &str) -> Option<Weekday> {
-    Some(match word {
-        "mon" | "monday" => Weekday::Mon,
-        "tue" | "tues" | "tuesday" => Weekday::Tue,
-        "wed" | "weds" | "wednesday" => Weekday::Wed,
-        "thu" | "thur" | "thurs" | "thursday" => Weekday::Thu,
-        "fri" | "friday" => Weekday::Fri,
-        "sat" | "saturday" => Weekday::Sat,
-        "sun" | "sunday" => Weekday::Sun,
-        _ => return None,
-    })
+pub fn weekday_of(word: &str) -> Option<Weekday> {
+    match word {
+        "mon" | "monday" => Some(Weekday::Mon),
+        "tue" | "tues" | "tuesday" => Some(Weekday::Tue),
+        "wed" | "weds" | "wednesday" => Some(Weekday::Wed),
+        "thu" | "thur" | "thurs" | "thursday" => Some(Weekday::Thu),
+        "fri" | "friday" => Some(Weekday::Fri),
+        "sat" | "saturday" => Some(Weekday::Sat),
+        "sun" | "sunday" => Some(Weekday::Sun),
+        _ => None,
+    }
 }
 
-/// Next occurrence of `weekday` strictly after today; `next` instead picks that weekday
-/// in the following Monday-based week.
 fn upcoming(today: NaiveDate, weekday: Weekday, next: bool) -> NaiveDate {
     let from = today.weekday().num_days_from_monday() as i64;
     let to = weekday.num_days_from_monday() as i64;
     let ahead = if next {
         7 - from + to
     } else {
-        match (to - from).rem_euclid(7) {
-            0 => 7,
-            d => d,
-        }
+        let days = (to - from).rem_euclid(7);
+        if days == 0 { 7 } else { days }
     };
+
     today + Duration::days(ahead)
 }
 
 fn end_of_week(today: NaiveDate) -> NaiveDate {
-    let ahead = (Weekday::Fri.num_days_from_monday() as i64
-        - today.weekday().num_days_from_monday() as i64)
-        .max(0);
+    let friday = Weekday::Fri.num_days_from_monday() as i64;
+    let current = today.weekday().num_days_from_monday() as i64;
+    let ahead = (friday - current).max(0);
+
     today + Duration::days(ahead)
 }
 
@@ -212,12 +223,12 @@ fn end_of_month(today: NaiveDate) -> NaiveDate {
     } else {
         (today.year(), today.month() + 1)
     };
-    NaiveDate::from_ymd_opt(year, month, 1)
-        .map(|first| first - Duration::days(1))
-        .unwrap_or(today)
+    match NaiveDate::from_ymd_opt(year, month, 1) {
+        Some(first_of_next) => first_of_next - Duration::days(1),
+        None => today,
+    }
 }
 
-/// `+3d`, `3d`, `2w`, `1m`, `in 3 days`, `in 2 weeks`.
 fn parse_offset(text: &str, today: NaiveDate) -> Option<NaiveDate> {
     let body = text.strip_prefix("in ").unwrap_or(text);
     let body = body.strip_prefix('+').unwrap_or(body).trim();
@@ -243,44 +254,57 @@ fn month_of(word: &str) -> Option<u32> {
     if word.len() < 3 {
         return None;
     }
-    let idx = NAMES.iter().position(|m| word.starts_with(m))?;
-    Some(idx as u32 + 1)
+    let index = NAMES.iter().position(|name| word.starts_with(name))?;
+
+    Some(index as u32 + 1)
 }
 
 fn day_number(word: &str) -> Option<u32> {
     let digits = word.trim_end_matches(|c: char| c.is_ascii_alphabetic());
-    if !word[digits.len()..].is_empty()
-        && !matches!(&word[digits.len()..], "st" | "nd" | "rd" | "th")
-    {
+    let suffix = &word[digits.len()..];
+
+    if !suffix.is_empty() && !matches!(suffix, "st" | "nd" | "rd" | "th") {
         return None;
     }
+
     digits.parse().ok()
 }
 
-/// `oct 25`, `25 oct`, `oct 25 2027`.
 fn parse_month_day(words: &[&str], today: NaiveDate) -> Option<NaiveDate> {
-    let (month, day, year) = match words {
-        [a, b] | [a, b, _] if month_of(a).is_some() => (month_of(a)?, day_number(b)?, words.get(2)),
-        [a, b] | [a, b, _] if month_of(b).is_some() => (month_of(b)?, day_number(a)?, words.get(2)),
-        _ => return None,
+    if words.len() != 2 && words.len() != 3 {
+        return None;
+    }
+
+    let (first, second) = (words[0], words[1]);
+    let (month, day) = if let Some(month) = month_of(first) {
+        (month, day_number(second)?)
+    } else if let Some(month) = month_of(second) {
+        (month, day_number(first)?)
+    } else {
+        return None;
     };
-    resolve_month_day(month, day, year.and_then(|y| y.parse().ok()), today)
+
+    let year = match words.get(2) {
+        Some(text) => text.parse().ok(),
+        None => None,
+    };
+
+    resolve_month_day(month, day, year, today)
 }
 
-/// `10/25`, `10-25`, `10/25/2027`.
 fn parse_numeric_month_day(text: &str, today: NaiveDate) -> Option<NaiveDate> {
-    let parts: Vec<u32> = text
-        .split(['/', '-'])
-        .map(|p| p.trim().parse().ok())
-        .collect::<Option<_>>()?;
+    let mut parts: Vec<u32> = Vec::new();
+    for piece in text.split(['/', '-']) {
+        parts.push(piece.trim().parse().ok()?);
+    }
+
     match parts.as_slice() {
-        [m, d] => resolve_month_day(*m, *d, None, today),
-        [m, d, y] => resolve_month_day(*m, *d, Some(*y as i32), today),
+        [month, day] => resolve_month_day(*month, *day, None, today),
+        [month, day, year] => resolve_month_day(*month, *day, Some(*year as i32), today),
         _ => None,
     }
 }
 
-/// Without an explicit year, a date already past rolls into next year.
 fn resolve_month_day(
     month: u32,
     day: u32,
@@ -290,7 +314,9 @@ fn resolve_month_day(
     if let Some(year) = year {
         return NaiveDate::from_ymd_opt(year, month, day);
     }
+
     let this_year = NaiveDate::from_ymd_opt(today.year(), month, day)?;
+
     if this_year >= today {
         Some(this_year)
     } else {

@@ -138,11 +138,15 @@ impl Component for KanbanComponent {
     fn update(&mut self, action: &Action, state: &AppState) {
         match action {
             Action::ShiftTaskStatus { forward, .. } => self.follow_card(*forward),
-            Action::SelectNext if state.view_mode == ViewMode::Kanban => {
-                self.next(self.column_len(state));
+            Action::SelectNext => {
+                if state.view_mode == ViewMode::Kanban {
+                    self.next(self.column_len(state));
+                }
             }
-            Action::SelectPrev if state.view_mode == ViewMode::Kanban => {
-                self.prev(self.column_len(state));
+            Action::SelectPrev => {
+                if state.view_mode == ViewMode::Kanban {
+                    self.prev(self.column_len(state));
+                }
             }
             _ => {}
         }
@@ -260,10 +264,10 @@ impl KanbanComponent {
                 } else {
                     format!("due {when}")
                 };
-                let repeat = item
-                    .repeat
-                    .map(|r| format!(" \u{21bb} {r}"))
-                    .unwrap_or_default();
+                let repeat = match item.repeat {
+                    Some(repeat) => format!(" \u{21bb} {repeat}"),
+                    None => String::new(),
+                };
                 lines.push(Line::from(vec![
                     Span::raw("    "),
                     Span::styled(format!("{when}{repeat}"), Theme::due(urgency)),

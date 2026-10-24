@@ -26,7 +26,6 @@ use ratatui::{
 const LABEL_WIDTH: u16 = 10;
 const NOTES_ROWS: u16 = 3;
 const FORM_HEIGHT: u16 = 17;
-/// Inner height below which blank spacers and rules are dropped so every row stays visible.
 const ROOMY_INNER: u16 = FORM_HEIGHT - 2;
 const NARROW_INNER: u16 = 48;
 
@@ -100,7 +99,11 @@ impl Default for EditorComponent {
 
 impl EditorComponent {
     pub fn text_input(&self) -> Option<&TextInput> {
-        (self.field != FormField::Priority).then_some(&self.input)
+        if self.field == FormField::Priority {
+            None
+        } else {
+            Some(&self.input)
+        }
     }
 
     fn open_create(&mut self, status: Status) {
@@ -129,7 +132,10 @@ impl EditorComponent {
             (_, Some(due)) => due.to_string(),
             _ => String::new(),
         };
-        self.repeat = item.repeat.map(|r| r.to_string()).unwrap_or_default();
+        self.repeat = match item.repeat {
+            Some(repeat) => repeat.to_string(),
+            None => String::new(),
+        };
         self.field = FormField::Title;
         self.edit_idx = Some(idx);
         self.focus_field();
@@ -150,42 +156,53 @@ impl EditorComponent {
     fn focus_field(&mut self) {
         self.tag_sel = None;
         let (input, buf) = self.input_and_buf();
-        input.focus(buf.map(|b| b.as_str()).unwrap_or(""));
+        match buf {
+            Some(buf) => input.focus(buf),
+            None => input.focus(""),
+        }
     }
 
-    /// Existing tags matching the token being typed, most used first.
-    /// Empty unless the caret sits at the end of an insert-mode Tags field.
     fn suggestions(&self, state: &AppState) -> Vec<String> {
-        if self.field != FormField::Tags
-            || !self.input.insert
-            || self.input.cursor != textedit::char_len(&self.tags)
-        {
+        let typing_tag = self.field == FormField::Tags
+            && self.input.insert
+            && self.input.cursor == textedit::char_len(&self.tags);
+        if !typing_tag {
             return Vec::new();
         }
-        let (head, token) = split_tags(&self.tags);
+
+        let (finished, token) = split_tags(&self.tags);
         let token = token.to_lowercase();
-        let used: Vec<String> = head
-            .split(',')
-            .map(|t| t.trim().to_lowercase())
-            .filter(|t| !t.is_empty())
-            .collect();
-        let candidates = state.tags().iter().map(|(t, _)| t).filter(|t| {
-            let lower = t.to_lowercase();
-            lower != token && !used.contains(&lower)
-        });
-        let (mut hits, rest): (Vec<_>, Vec<_>) =
-            candidates.partition(|t| t.to_lowercase().starts_with(&token));
-        hits.extend(
-            rest.into_iter()
-                .filter(|t| t.to_lowercase().contains(&token)),
-        );
-        hits.into_iter().cloned().collect()
+        let mut already_used: Vec<String> = Vec::new();
+        for tag in finished.split(',') {
+            let tag = tag.trim().to_lowercase();
+            if !tag.is_empty() {
+                already_used.push(tag);
+            }
+        }
+
+        let mut starts_with = Vec::new();
+        let mut contains = Vec::new();
+        for (tag, _) in state.tags() {
+            let lower = tag.to_lowercase();
+            if lower == token || already_used.contains(&lower) {
+                continue;
+            }
+            if lower.starts_with(&token) {
+                starts_with.push(tag.clone());
+            } else if lower.contains(&token) {
+                contains.push(tag.clone());
+            }
+        }
+        starts_with.extend(contains);
+        starts_with
     }
 
-    /// Index Tab or Enter would complete: the picked chip, else the best match for typed text.
     fn tag_target(&self) -> Option<usize> {
-        self.tag_sel
-            .or_else(|| (!split_tags(&self.tags).1.is_empty()).then_some(0))
+        if self.tag_sel.is_some() {
+            return self.tag_sel;
+        }
+        let (_, token) = split_tags(&self.tags);
+        if token.is_empty() { None } else { Some(0) }
     }
 
     fn accept_tag(&mut self, tag: &str) {
@@ -215,7 +232,6 @@ impl EditorComponent {
         }
     }
 
-    /// `Err` when the typed due text is not a date or range; `Ok(None)` when it is empty.
     fn parsed_due(&self) -> Result<Option<Window>, InvalidDate> {
         due::parse_window(&self.due, Local::now().date_naive())
     }
@@ -230,26 +246,31 @@ impl EditorComponent {
         }
         let repeat = self.parsed_repeat().ok()?;
         let mut window = self.parsed_due().ok()?;
-        if window.is_none() {
-            window = repeat.map(|r| Window {
-                start: None,
-                end: r.first_from(Local::now().date_naive()),
-            });
+        if window.is_none()
+            && let Some(repeat) = repeat
+        {
+            let end = repeat.first_from(Local::now().date_naive());
+            window = Some(Window { start: None, end });
         }
-        let tags = self
-            .tags
-            .split(',')
-            .map(|t| t.trim().to_string())
-            .filter(|t| !t.is_empty())
-            .collect();
+        let (due, start) = match window {
+            Some(window) => (Some(window.end), window.start),
+            None => (None, None),
+        };
+        let mut tags = Vec::new();
+        for tag in self.tags.split(',') {
+            let tag = tag.trim();
+            if !tag.is_empty() {
+                tags.push(tag.to_string());
+            }
+        }
         Some(Action::SaveTask(TaskDraft {
             id: self.edit_idx,
             title: self.title.trim().to_string(),
             description: self.description.trim().to_string(),
             priority: self.priority,
             tags,
-            due: window.map(|w| w.end),
-            start: window.and_then(|w| w.start),
+            due,
+            start,
             repeat,
             status: self.create_status,
         }))
@@ -266,11 +287,10 @@ impl Component for EditorComponent {
         }
 
         if code == KeyCode::Esc {
-            let field = self.field;
             let (input, buf) = self.input_and_buf();
             let consumed = match buf {
-                Some(buf) if field != FormField::Priority => input.handle_esc(buf),
-                _ => false,
+                Some(buf) => input.handle_esc(buf),
+                None => false,
             };
             return if consumed {
                 KeyResult::Handled
@@ -284,15 +304,23 @@ impl Component for EditorComponent {
             let n = suggestions.len();
             match code {
                 KeyCode::Down => {
-                    self.tag_sel = Some(self.tag_sel.map_or(0, |i| (i + 1) % n));
+                    self.tag_sel = match self.tag_sel {
+                        Some(i) => Some((i + 1) % n),
+                        None => Some(0),
+                    };
                     return KeyResult::Handled;
                 }
                 KeyCode::Up => {
-                    self.tag_sel = Some(self.tag_sel.map_or(n - 1, |i| (i + n - 1) % n));
+                    self.tag_sel = match self.tag_sel {
+                        Some(i) => Some((i + n - 1) % n),
+                        None => Some(n - 1),
+                    };
                     return KeyResult::Handled;
                 }
                 KeyCode::Tab | KeyCode::Enter => {
-                    if let Some(tag) = self.tag_target().and_then(|i| suggestions.get(i)) {
+                    if let Some(i) = self.tag_target()
+                        && let Some(tag) = suggestions.get(i)
+                    {
                         self.accept_tag(tag);
                         return KeyResult::Handled;
                     }
@@ -412,7 +440,7 @@ impl Component for EditorComponent {
             Paragraph::new(field_or_placeholder(
                 &self.title,
                 cursor,
-                title_focused.then_some(anchor).flatten(),
+                anchor_if(title_focused, anchor),
                 "Untitled",
             )),
             v,
@@ -430,7 +458,7 @@ impl Component for EditorComponent {
             Paragraph::new(field_or_placeholder(
                 &self.description,
                 cursor,
-                notes_focused.then_some(anchor).flatten(),
+                anchor_if(notes_focused, anchor),
                 "Add notes...",
             )),
             v,
@@ -483,7 +511,7 @@ impl Component for EditorComponent {
             Paragraph::new(field_or_placeholder(
                 &self.due,
                 cursor,
-                due_focused.then_some(anchor).flatten(),
+                anchor_if(due_focused, anchor),
                 "fri, +3d, oct 25, fri..sun",
             )),
             due_input,
@@ -516,7 +544,7 @@ impl Component for EditorComponent {
             Paragraph::new(field_or_placeholder(
                 &self.repeat,
                 cursor,
-                repeat_focused.then_some(anchor).flatten(),
+                anchor_if(repeat_focused, anchor),
                 "daily, weekly, every fri, 2w",
             )),
             repeat_input,
@@ -538,7 +566,7 @@ impl Component for EditorComponent {
             Paragraph::new(field_or_placeholder(
                 &self.tags,
                 cursor,
-                tags_focused.then_some(anchor).flatten(),
+                anchor_if(tags_focused, anchor),
                 "design, ui",
             )),
             v,
@@ -645,10 +673,13 @@ fn split_row(row: Rect) -> (Rect, Rect, Rect) {
     (g, l, v)
 }
 
-/// Splits the tags buffer into the finished part (through the last comma) and the token being typed.
 fn split_tags(tags: &str) -> (&str, &str) {
     match tags.rfind(',') {
         Some(i) => (&tags[..i], tags[i + 1..].trim()),
         None => ("", tags.trim()),
     }
+}
+
+fn anchor_if(focused: bool, anchor: Option<usize>) -> Option<usize> {
+    if focused { anchor } else { None }
 }

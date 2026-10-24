@@ -58,8 +58,6 @@ impl Config {
         Self::from_toml(&contents).unwrap_or_default()
     }
 
-    /// `None` when the text is not valid TOML or a known key has the wrong type; unknown keys
-    /// are ignored and missing ones keep their defaults.
     pub fn from_toml(text: &str) -> Option<Self> {
         let root = mini_toml::parse(text).ok()?;
         let mut config = Self::default();
@@ -86,7 +84,6 @@ impl Config {
     }
 }
 
-/// `Some(None)` when the section is absent, `None` when the key exists but is not a table.
 fn section<'a>(root: &'a Table, name: &str) -> Option<Option<&'a Table>> {
     match root.get(name) {
         None => Some(None),
@@ -95,7 +92,6 @@ fn section<'a>(root: &'a Table, name: &str) -> Option<Option<&'a Table>> {
     }
 }
 
-/// Overwrites `slot` when `key` is present; `None` if it is present with the wrong type.
 fn read<T>(table: &Table, key: &str, conv: fn(&Value) -> Option<T>, slot: &mut T) -> Option<()> {
     if let Some(value) = table.get(key) {
         *slot = conv(value)?;
@@ -126,7 +122,13 @@ fn as_string(v: &Value) -> Option<String> {
 
 fn as_strings(v: &Value) -> Option<Vec<String>> {
     match v {
-        Value::Array(items) => items.iter().map(as_string).collect(),
+        Value::Array(items) => {
+            let mut strings = Vec::new();
+            for item in items {
+                strings.push(as_string(item)?);
+            }
+            Some(strings)
+        }
         _ => None,
     }
 }

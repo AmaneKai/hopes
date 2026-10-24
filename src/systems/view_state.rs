@@ -2,7 +2,6 @@ use crate::domain::{AppState, NavSection, SortMode, ViewMode};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// UI choices that survive restarts. Kept out of the data dir so it never gets synced.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ViewState {
     pub view_mode: ViewMode,
@@ -32,10 +31,16 @@ impl ViewState {
         state.view_mode = self.view_mode;
         state.sort_mode = self.sort_mode;
         state.nav_section = self.nav_section;
-        state.tag_filter = self.tag_filter.filter(|f| match f.strip_prefix('#') {
-            Some(tag) => state.tags().iter().any(|(t, _)| t == tag),
-            None => true,
-        });
+        state.tag_filter = None;
+        if let Some(filter) = self.tag_filter {
+            let still_exists = match filter.strip_prefix('#') {
+                Some(tag) => state.tags().iter().any(|(t, _)| t == tag),
+                None => true,
+            };
+            if still_exists {
+                state.tag_filter = Some(filter);
+            }
+        }
         state.refresh_cache();
     }
 

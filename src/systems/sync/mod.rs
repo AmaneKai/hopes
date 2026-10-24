@@ -232,7 +232,7 @@ fn do_push(dir: &Path, remote: &str, branch: &str, tx: &Sender<SyncStatus>) -> b
 }
 
 fn retry_deadline(retry: bool) -> Option<Instant> {
-    retry.then(Instant::now)
+    if retry { Some(Instant::now()) } else { None }
 }
 
 fn worker_loop(
@@ -250,11 +250,11 @@ fn worker_loop(
         let _ = tx.send(SyncStatus::Idle);
     }
 
-    let mut pending_since: Option<Instant> = git::has_unsynced_changes(&data_dir, &remote, &branch)
-        .then(|| {
-            let _ = tx.send(SyncStatus::Syncing("Pending sync...".into()));
-            Instant::now()
-        });
+    let mut pending_since: Option<Instant> = None;
+    if git::has_unsynced_changes(&data_dir, &remote, &branch) {
+        let _ = tx.send(SyncStatus::Syncing("Pending sync...".into()));
+        pending_since = Some(Instant::now());
+    }
 
     loop {
         let due = pending_since.is_some_and(|started| started.elapsed() >= debounce);
@@ -267,10 +267,11 @@ fn worker_loop(
             Ok(SyncRequest::ForceSync) => {
                 pending_since = retry_deadline(do_push(&data_dir, &remote, &branch, &tx));
             }
-            Err(RecvTimeoutError::Timeout) if due => {
-                pending_since = retry_deadline(do_push(&data_dir, &remote, &branch, &tx));
+            Err(RecvTimeoutError::Timeout) => {
+                if due {
+                    pending_since = retry_deadline(do_push(&data_dir, &remote, &branch, &tx));
+                }
             }
-            Err(RecvTimeoutError::Timeout) => {}
         }
     }
 }

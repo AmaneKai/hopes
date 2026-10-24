@@ -242,10 +242,12 @@ impl AppState {
 
     #[inline(always)]
     pub fn status(&self) -> Option<&str> {
-        self.status_message
-            .as_ref()
-            .filter(|(_, at)| at.elapsed() < STATUS_TTL)
-            .map(|(msg, _)| msg.as_str())
+        let (message, set_at) = self.status_message.as_ref()?;
+        if set_at.elapsed() < STATUS_TTL {
+            Some(message.as_str())
+        } else {
+            None
+        }
     }
 
     #[inline(always)]
@@ -279,25 +281,30 @@ impl AppState {
             }
         }
 
-        stats.percent = (stats.complete * 100usize)
-            .checked_div(stats.total)
-            .unwrap_or(0);
+        if stats.total > 0 {
+            stats.percent = stats.complete * 100 / stats.total;
+        }
         self.stats = stats;
         self.kanban_cols = columns;
 
         let mut tags: Vec<(String, usize)> = tag_counts.into_iter().collect();
-        tags.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        tags.sort_by(|a, b| {
+            if a.1 != b.1 {
+                b.1.cmp(&a.1)
+            } else {
+                a.0.cmp(&b.0)
+            }
+        });
         self.tags = tags;
     }
 
     fn refresh_visible(&mut self) {
-        let mut indices: Vec<usize> = self
-            .items
-            .iter()
-            .enumerate()
-            .filter(|(_, item)| self.is_visible(item))
-            .map(|(i, _)| i)
-            .collect();
+        let mut indices: Vec<usize> = Vec::new();
+        for (i, item) in self.items.iter().enumerate() {
+            if self.is_visible(item) {
+                indices.push(i);
+            }
+        }
 
         match self.sort_mode {
             SortMode::Natural => {}
@@ -377,11 +384,20 @@ fn matches_query(item: &Item, filter: &str) -> bool {
         return true;
     }
     if let Some(tag_query) = query.strip_prefix('#') {
-        return item.tags.iter().any(|t| contains_ignore_case(t, tag_query));
+        return any_tag_contains(item, tag_query);
     }
     contains_ignore_case(&item.title, query)
         || contains_ignore_case(&item.description, query)
-        || item.tags.iter().any(|t| contains_ignore_case(t, query))
+        || any_tag_contains(item, query)
         || contains_ignore_case(item.priority.label(), query)
         || contains_ignore_case(item.status.label(), query)
+}
+
+fn any_tag_contains(item: &Item, query: &str) -> bool {
+    for tag in &item.tags {
+        if contains_ignore_case(tag, query) {
+            return true;
+        }
+    }
+    false
 }

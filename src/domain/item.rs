@@ -13,7 +13,6 @@ pub struct Item {
     pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub due: Option<NaiveDate>,
-    /// Day the task becomes workable; only meaningful together with `due`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start: Option<NaiveDate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -41,7 +40,6 @@ impl Item {
         })
     }
 
-    /// Open tasks past their due date.
     pub fn is_overdue(&self, today: NaiveDate) -> bool {
         self.status != Status::Complete && self.due.is_some_and(|d| d < today)
     }

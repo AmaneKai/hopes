@@ -43,11 +43,14 @@ impl Storage for SqliteStore {
         let rows = stmt
             .query_map([], |r| r.get::<_, String>(0))
             .map_err(db_err)?;
-        rows.map(|row| {
+        let mut items = Vec::new();
+        for row in rows {
             let data = row.map_err(db_err)?;
-            serde_json::from_str(&data).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
-        })
-        .collect()
+            let item = serde_json::from_str(&data)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            items.push(item);
+        }
+        Ok(items)
     }
 
     fn save(&self, items: &[Item]) -> io::Result<()> {

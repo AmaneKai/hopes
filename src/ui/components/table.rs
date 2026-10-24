@@ -1,13 +1,13 @@
 use crate::{
     action::Action,
-    domain::{AppState, Priority, Status, ViewMode, due::DueUrgency},
+    domain::{AppState, Item, Priority, Status, ViewMode, due::DueUrgency},
     ui::{
-        Component, KeyResult, TaskView,
+        Component, KeyResult, TaskView, hashtags,
         keys::{Chords, on_selected, task_command},
         theme::Theme,
     },
 };
-use chrono::Local;
+use chrono::{Local, NaiveDate};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
@@ -17,7 +17,6 @@ use ratatui::{
 };
 
 const PAGE: usize = 5;
-/// Highlight symbol, status, due, priority and the four column gaps.
 const MAX_DUE_WIDTH: usize = 16;
 const FIXED_COLS: usize = 2 + 2 + 7 + 4;
 const MIN_TITLE: usize = 12;
@@ -50,10 +49,13 @@ impl TableComponent {
     }
 
     pub fn position(&self, state: &AppState) -> usize {
-        match self.table_state.selected() {
-            Some(i) if !state.filtered_indices().is_empty() => i + 1,
-            _ => 0,
+        let Some(selected) = self.table_state.selected() else {
+            return 0;
+        };
+        if state.filtered_indices().is_empty() {
+            return 0;
         }
+        selected + 1
     }
 
     fn next(&mut self, count: usize) {
@@ -61,8 +63,13 @@ impl TableComponent {
             return;
         }
         let i = match self.table_state.selected() {
-            Some(i) if i >= count - 1 => 0,
-            Some(i) => i + 1,
+            Some(i) => {
+                if i + 1 >= count {
+                    0
+                } else {
+                    i + 1
+                }
+            }
             None => 0,
         };
         self.table_state.select(Some(i));
@@ -186,11 +193,15 @@ impl Component for TableComponent {
         match action {
             Action::DeleteTask(_) | Action::DataReloaded => self.clamp(count),
             Action::SelectIndex(i) => self.table_state.select(Some(*i)),
-            Action::SelectNext if state.view_mode == ViewMode::Table => {
-                self.next(count);
+            Action::SelectNext => {
+                if state.view_mode == ViewMode::Table {
+                    self.next(count);
+                }
             }
-            Action::SelectPrev if state.view_mode == ViewMode::Table => {
-                self.prev(count);
+            Action::SelectPrev => {
+                if state.view_mode == ViewMode::Table {
+                    self.prev(count);
+                }
             }
             _ => {}
         }
@@ -220,48 +231,28 @@ impl Component for TableComponent {
             return;
         }
 
-        let tag_texts: Vec<String> = visible_indices
-            .iter()
-            .map(|&i| {
-                state.items[i]
-                    .tags
-                    .iter()
-                    .map(|t| format!("#{t}"))
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            })
-            .collect();
         let inner_width = area.width.saturating_sub(3) as usize;
-        let tags_width = tag_texts
-            .iter()
-            .map(|t| t.chars().count())
-            .max()
-            .unwrap_or(0)
-            .min(inner_width / 3);
         let today = Local::now().date_naive();
-        let due_texts: Vec<Option<(String, DueUrgency)>> = visible_indices
-            .iter()
-            .map(|&i| {
-                let item = &state.items[i];
-                let window = item.window().filter(|_| item.status != Status::Complete)?;
-                let mark = if item.repeat.is_some() {
-                    "\u{21bb} "
-                } else {
-                    ""
-                };
-                Some((
-                    format!("{mark}{}", window.label(today)),
-                    window.urgency(today),
-                ))
-            })
-            .collect();
-        let due_width = due_texts
-            .iter()
-            .flatten()
-            .map(|(text, _)| text.chars().count())
-            .max()
-            .unwrap_or(0)
-            .min(MAX_DUE_WIDTH);
+
+        let mut tag_texts: Vec<String> = Vec::new();
+        let mut due_texts: Vec<Option<(String, DueUrgency)>> = Vec::new();
+        let mut tags_width = 0;
+        let mut due_width = 0;
+        for &i in visible_indices {
+            let item = &state.items[i];
+
+            let tags = hashtags(&item.tags, " ");
+            tags_width = tags_width.max(tags.chars().count());
+            tag_texts.push(tags);
+
+            let due = due_text(item, today);
+            if let Some((text, _)) = &due {
+                due_width = due_width.max(text.chars().count());
+            }
+            due_texts.push(due);
+        }
+        let tags_width = tags_width.min(inner_width / 3);
+        let due_width = due_width.min(MAX_DUE_WIDTH);
         let title_width = inner_width
             .saturating_sub(FIXED_COLS + tags_width + due_width)
             .max(MIN_TITLE);
@@ -326,4 +317,18 @@ impl Component for TableComponent {
 
         f.render_stateful_widget(table, area, &mut self.table_state);
     }
+}
+
+fn due_text(item: &Item, today: NaiveDate) -> Option<(String, DueUrgency)> {
+    if item.status == Status::Complete {
+        return None;
+    }
+    let window = item.window()?;
+    let mark = if item.repeat.is_some() {
+        "\u{21bb} "
+    } else {
+        ""
+    };
+    let text = format!("{mark}{}", window.label(today));
+    Some((text, window.urgency(today)))
 }

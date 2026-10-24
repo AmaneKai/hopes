@@ -39,7 +39,11 @@ impl CmdlineComponent {
 
     fn find_action(&self) -> Action {
         let query = self.buf.trim();
-        let filter = (!query.is_empty()).then(|| query.to_string());
+        let filter = if query.is_empty() {
+            None
+        } else {
+            Some(query.to_string())
+        };
         Action::Batch(vec![Action::SetFilter(filter), Action::CloseModal])
     }
 
@@ -57,8 +61,13 @@ impl Component for CmdlineComponent {
 
         match key.code {
             KeyCode::Enter => KeyResult::Emit(self.submit_action()),
-            KeyCode::Esc if self.input.handle_esc(&mut self.buf) => KeyResult::Handled,
-            KeyCode::Esc => KeyResult::Emit(Action::CloseModal),
+            KeyCode::Esc => {
+                if self.input.handle_esc(&mut self.buf) {
+                    KeyResult::Handled
+                } else {
+                    KeyResult::Emit(Action::CloseModal)
+                }
+            }
             code => {
                 self.input.handle_key(&mut self.buf, code, ctrl, false);
                 KeyResult::Handled

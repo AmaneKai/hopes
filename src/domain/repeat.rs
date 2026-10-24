@@ -1,4 +1,4 @@
-use super::due::InvalidDate;
+use super::due::{InvalidDate, weekday_of};
 use chrono::{Datelike, Duration, Months, NaiveDate, Weekday};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -15,21 +15,14 @@ pub enum Unit {
     Year,
 }
 
-/// How a task comes back after it is completed.
-///
-/// Serialized as its display text (`weekly`, `every 2w`, `Mon, Wed`) so data files stay readable.
 #[derive(PartialEq, Eq, Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub enum Repeat {
-    /// Every `n` days / weeks / months / years.
     Every(u32, Unit),
-    /// On the given weekdays, bit 0 = Monday.
     On(u8),
 }
 
 impl Repeat {
-    /// Parses `daily`, `weekly`, `every 2 weeks`, `3d`, `every fri`, `mon wed fri`, `weekdays`.
-    /// Empty input is `Ok(None)` (does not repeat).
     pub fn parse(input: &str) -> Result<Option<Self>, InvalidDate> {
         let text = input.trim().to_lowercase();
         if text.is_empty() || matches!(text.as_str(), "none" | "never" | "off" | "-") {
@@ -38,7 +31,6 @@ impl Repeat {
         parse_repeat(&text).map(Some).ok_or(InvalidDate)
     }
 
-    /// First occurrence on or after `from`; where a new repeating task starts.
     pub fn first_from(&self, from: NaiveDate) -> NaiveDate {
         match self {
             Self::Every(..) => from,
@@ -46,8 +38,6 @@ impl Repeat {
         }
     }
 
-    /// The occurrence after completing the one due on `base`: the first one past `base` that is
-    /// not already behind `today`, so missed cycles are skipped rather than replayed.
     pub fn next_after(&self, base: NaiveDate, today: NaiveDate) -> NaiveDate {
         let earliest = (base + Duration::days(1)).max(today);
         match *self {
@@ -62,22 +52,30 @@ impl Repeat {
 
 fn step_days(base: NaiveDate, step: i64, earliest: NaiveDate) -> NaiveDate {
     let gap = (earliest - base).num_days();
-    base + Duration::days(((gap + step - 1) / step).max(1) * step)
+    let steps = ((gap + step - 1) / step).max(1);
+    base + Duration::days(steps * step)
 }
 
-/// Steps from `base` itself each time so a 31st clamps to month end without drifting.
 fn step_months(base: NaiveDate, step: u32, earliest: NaiveDate) -> NaiveDate {
-    (1..)
-        .map_while(|k| base.checked_add_months(Months::new(step * k)))
-        .find(|d| *d >= earliest)
-        .unwrap_or(earliest)
+    for k in 1.. {
+        let Some(date) = base.checked_add_months(Months::new(step * k)) else {
+            break;
+        };
+        if date >= earliest {
+            return date;
+        }
+    }
+    earliest
 }
 
 fn next_weekday(mask: u8, from: NaiveDate) -> NaiveDate {
-    (0..7)
-        .map(|i| from + Duration::days(i))
-        .find(|d| mask & (1 << d.weekday().num_days_from_monday()) != 0)
-        .unwrap_or(from)
+    for offset in 0..7 {
+        let date = from + Duration::days(offset);
+        if mask & bit(date.weekday()) != 0 {
+            return date;
+        }
+    }
+    from
 }
 
 impl fmt::Display for Repeat {
@@ -88,24 +86,25 @@ impl fmt::Display for Repeat {
             Self::Every(1, Unit::Month) => f.write_str("monthly"),
             Self::Every(1, Unit::Year) => f.write_str("yearly"),
             Self::Every(n, unit) => {
-                let c = match unit {
+                let letter = match unit {
                     Unit::Day => 'd',
                     Unit::Week => 'w',
                     Unit::Month => 'm',
                     Unit::Year => 'y',
                 };
-                write!(f, "every {n}{c}")
+                write!(f, "every {n}{letter}")
             }
             Self::On(MON_FRI) => f.write_str("weekdays"),
             Self::On(SAT_SUN) => f.write_str("weekends"),
             Self::On(mask) => {
-                let days: Vec<String> = ALL_DAYS
-                    .iter()
-                    .filter(|d| mask & bit(**d) != 0)
-                    .map(|d| d.to_string())
-                    .collect();
-                if let [only] = days.as_slice() {
-                    write!(f, "every {only}")
+                let mut days: Vec<String> = Vec::new();
+                for day in ALL_DAYS {
+                    if mask & bit(day) != 0 {
+                        days.push(day.to_string());
+                    }
+                }
+                if days.len() == 1 {
+                    write!(f, "every {}", days[0])
                 } else {
                     f.write_str(&days.join(", "))
                 }
@@ -146,7 +145,10 @@ fn bit(day: Weekday) -> u8 {
 }
 
 fn parse_repeat(text: &str) -> Option<Repeat> {
-    let body = text.strip_prefix("every").map_or(text, str::trim);
+    let body = match text.strip_prefix("every") {
+        Some(rest) => rest.trim(),
+        None => text,
+    };
     match body {
         "day" | "daily" => return Some(Repeat::Every(1, Unit::Day)),
         "week" | "weekly" => return Some(Repeat::Every(1, Unit::Week)),
@@ -162,16 +164,18 @@ fn parse_repeat(text: &str) -> Option<Repeat> {
     }
 
     let mut mask = 0u8;
-    let words = body
-        .split(|c: char| c.is_whitespace() || c == ',')
-        .filter(|w| !w.is_empty());
-    for word in words {
+    for word in body.split(|c: char| c.is_whitespace() || c == ',') {
+        if word.is_empty() {
+            continue;
+        }
         mask |= bit(weekday_of(word)?);
     }
-    (mask != 0).then_some(Repeat::On(mask))
+    if mask == 0 {
+        return None;
+    }
+    Some(Repeat::On(mask))
 }
 
-/// `2w`, `3 days`, `1 month`.
 fn parse_interval(body: &str) -> Option<Repeat> {
     let split = body.find(|c: char| !c.is_ascii_digit())?;
     let (digits, unit) = body.split_at(split);
@@ -187,17 +191,4 @@ fn parse_interval(body: &str) -> Option<Repeat> {
         _ => return None,
     };
     Some(Repeat::Every(n, unit))
-}
-
-fn weekday_of(word: &str) -> Option<Weekday> {
-    Some(match word {
-        "mon" | "monday" => Weekday::Mon,
-        "tue" | "tues" | "tuesday" => Weekday::Tue,
-        "wed" | "weds" | "wednesday" => Weekday::Wed,
-        "thu" | "thur" | "thurs" | "thursday" => Weekday::Thu,
-        "fri" | "friday" => Weekday::Fri,
-        "sat" | "saturday" => Weekday::Sat,
-        "sun" | "sunday" => Weekday::Sun,
-        _ => return None,
-    })
 }

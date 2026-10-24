@@ -1,8 +1,3 @@
-//! A small TOML reader covering what `config.toml` needs, so the full `toml` crate stays out of
-//! the binary. Supports tables (`[a.b]`), dotted keys, basic / literal / multi-line strings,
-//! integers (decimal, hex, octal, binary, `_` separators), booleans, arrays and inline tables.
-//! Floats and dates parse as opaque scalars. Duplicate keys and malformed input are errors.
-
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -10,7 +5,6 @@ pub enum Value {
     Str(String),
     Int(i64),
     Bool(bool),
-    /// A float or date-time; accepted so the file parses, but never read.
     Other,
     Array(Vec<Value>),
     Table(Table),
@@ -33,6 +27,14 @@ pub fn parse(input: &str) -> Res<Table> {
         pos: 0,
     };
     p.document()
+}
+
+#[derive(Default)]
+struct Document {
+    root: Table,
+    current: Vec<String>,
+    defined: Vec<Vec<String>>,
+    sealed: Vec<Vec<String>>,
 }
 
 struct Parser {
@@ -90,15 +92,23 @@ impl Parser {
         Ok(())
     }
 
-    /// Whitespace, comments and newlines, for places a value may span lines.
+    fn eat_newline(&mut self) -> bool {
+        if self.eat('\n') {
+            return true;
+        }
+        if self.peek() == Some('\r') && self.peek_at(1) == Some('\n') {
+            self.pos += 2;
+            return true;
+        }
+        false
+    }
+
     fn skip_space_and_newlines(&mut self) -> Res<()> {
         loop {
             self.skip_blank();
             self.skip_comment()?;
-            match self.peek() {
-                Some('\n') => self.pos += 1,
-                Some('\r') if self.peek_at(1) == Some('\n') => self.pos += 2,
-                _ => return Ok(()),
+            if !self.eat_newline() {
+                return Ok(());
             }
         }
     }
@@ -106,80 +116,79 @@ impl Parser {
     fn end_of_line(&mut self) -> Res<()> {
         self.skip_blank();
         self.skip_comment()?;
-        match self.peek() {
-            None => Ok(()),
-            Some('\n') => {
-                self.pos += 1;
-                Ok(())
-            }
-            Some('\r') if self.peek_at(1) == Some('\n') => {
-                self.pos += 2;
-                Ok(())
-            }
-            _ => Err(ParseError),
+        if self.peek().is_none() || self.eat_newline() {
+            Ok(())
+        } else {
+            Err(ParseError)
         }
     }
 
     fn document(&mut self) -> Res<Table> {
-        let mut root = Table::new();
-        let mut current: Vec<String> = Vec::new();
-        // Tables created implicitly by a `[a.b]` header may still be defined explicitly later.
-        let mut defined: Vec<Vec<String>> = Vec::new();
-        // Inline tables and literal arrays are sealed: nothing may be added to them later.
-        let mut sealed: Vec<Vec<String>> = Vec::new();
+        let mut doc = Document::default();
         loop {
             self.skip_space_and_newlines()?;
             match self.peek() {
-                None => return Ok(root),
-                Some('[') => {
-                    self.pos += 1;
-                    let array = self.eat('[');
-                    self.skip_blank();
-                    let path = self.key_path()?;
-                    self.skip_blank();
-                    if !self.eat(']') || (array && !self.eat(']')) {
-                        return Err(ParseError);
-                    }
-                    self.end_of_line()?;
-                    if sealed.iter().any(|p| path.starts_with(p)) {
-                        return Err(ParseError);
-                    }
-                    if array {
-                        // A new element starts afresh, so its sub-tables may be defined again.
-                        defined.retain(|d| !d.starts_with(&path));
-                        push_element(&mut root, &path)?;
-                    } else {
-                        if defined.contains(&path) {
-                            return Err(ParseError);
-                        }
-                        define_table(&mut root, &path)?;
-                        defined.push(path.clone());
-                    }
-                    current = path;
-                }
-                Some(_) => {
-                    let path = self.key_path()?;
-                    self.skip_blank();
-                    if !self.eat('=') {
-                        return Err(ParseError);
-                    }
-                    self.skip_blank();
-                    let value = self.value()?;
-                    self.end_of_line()?;
-                    let full: Vec<String> = current.iter().chain(&path).cloned().collect();
-                    if sealed
-                        .iter()
-                        .any(|p| full.starts_with(p) && full.len() > p.len())
-                    {
-                        return Err(ParseError);
-                    }
-                    if matches!(value, Value::Table(_) | Value::Array(_)) {
-                        sealed.push(full);
-                    }
-                    insert(table_at(&mut root, &current)?, &path, value)?;
-                }
+                None => return Ok(doc.root),
+                Some('[') => self.table_header(&mut doc)?,
+                Some(_) => self.key_value(&mut doc)?,
             }
         }
+    }
+
+    fn table_header(&mut self, doc: &mut Document) -> Res<()> {
+        self.pos += 1;
+        let is_array = self.eat('[');
+        self.skip_blank();
+        let path = self.key_path()?;
+        self.skip_blank();
+        if !self.eat(']') {
+            return Err(ParseError);
+        }
+        if is_array && !self.eat(']') {
+            return Err(ParseError);
+        }
+        self.end_of_line()?;
+
+        if doc.sealed.iter().any(|sealed| path.starts_with(sealed)) {
+            return Err(ParseError);
+        }
+        if is_array {
+            doc.defined.retain(|defined| !defined.starts_with(&path));
+            push_element(&mut doc.root, &path)?;
+        } else {
+            if doc.defined.contains(&path) {
+                return Err(ParseError);
+            }
+            define_table(&mut doc.root, &path)?;
+            doc.defined.push(path.clone());
+        }
+        doc.current = path;
+        Ok(())
+    }
+
+    fn key_value(&mut self, doc: &mut Document) -> Res<()> {
+        let path = self.key_path()?;
+        self.skip_blank();
+        if !self.eat('=') {
+            return Err(ParseError);
+        }
+        self.skip_blank();
+        let value = self.value()?;
+        self.end_of_line()?;
+
+        let mut full = doc.current.clone();
+        full.extend(path.iter().cloned());
+        let inside_sealed = doc
+            .sealed
+            .iter()
+            .any(|sealed| full.starts_with(sealed) && full.len() > sealed.len());
+        if inside_sealed {
+            return Err(ParseError);
+        }
+        if matches!(value, Value::Table(_) | Value::Array(_)) {
+            doc.sealed.push(full);
+        }
+        insert(table_at(&mut doc.root, &doc.current)?, &path, value)
     }
 
     fn key_path(&mut self) -> Res<Vec<String>> {
@@ -223,13 +232,8 @@ impl Parser {
 
     fn scalar(&mut self) -> Res<Value> {
         let start = self.pos;
-        // Date-times may contain one space between the date and the time.
-        while let Some(c) = self.peek() {
-            if c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '_' | '.' | ':') {
-                self.pos += 1;
-            } else {
-                break;
-            }
+        while self.peek().is_some_and(is_scalar_char) {
+            self.pos += 1;
         }
         let word: String = self.chars[start..self.pos].iter().collect();
         match word.as_str() {
@@ -244,32 +248,33 @@ impl Parser {
         if is_float(&word) {
             return Ok(Value::Other);
         }
-        // A date and time may be separated by a single space instead of `T`.
-        let mut word = word;
-        if is_date(&word)
-            && self.peek() == Some(' ')
-            && self.peek_at(1).is_some_and(|c| c.is_ascii_digit())
-        {
-            let save = self.pos;
-            self.pos += 1;
-            let time_start = self.pos;
-            while self
-                .peek()
-                .is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.' | ':'))
-            {
-                self.pos += 1;
-            }
-            let time: String = self.chars[time_start..self.pos].iter().collect();
-            if valid_datetime(&format!("{word}T{time}")) {
-                return Ok(Value::Other);
-            }
-            self.pos = save;
-            word = word.clone();
+        if is_date(&word) && self.eat_datetime_time(&word) {
+            return Ok(Value::Other);
         }
         if valid_datetime(&word) {
             return Ok(Value::Other);
         }
         Err(ParseError)
+    }
+
+    fn eat_datetime_time(&mut self, date: &str) -> bool {
+        let followed_by_time =
+            self.peek() == Some(' ') && self.peek_at(1).is_some_and(|c| c.is_ascii_digit());
+        if !followed_by_time {
+            return false;
+        }
+        let save = self.pos;
+        self.pos += 1;
+        let time_start = self.pos;
+        while self.peek().is_some_and(|c| c != '_' && is_scalar_char(c)) {
+            self.pos += 1;
+        }
+        let time: String = self.chars[time_start..self.pos].iter().collect();
+        if valid_datetime(&format!("{date}T{time}")) {
+            return true;
+        }
+        self.pos = save;
+        false
     }
 
     fn array(&mut self) -> Res<Value> {
@@ -357,7 +362,6 @@ impl Parser {
             match self.bump().ok_or(ParseError)? {
                 '\\' => {
                     if matches!(self.peek(), Some(' ' | '\t' | '\n' | '\r')) {
-                        // Line-ending backslash trims the newline and following whitespace.
                         let save = self.pos;
                         self.skip_blank();
                         if matches!(self.peek(), Some('\n' | '\r')) {
@@ -398,7 +402,6 @@ impl Parser {
         }
     }
 
-    /// Consumes a closing `"""` / `'''`; one or two quotes right before it belong to the content.
     fn close_multiline(&mut self, quote: char, out: &mut String) -> Res<()> {
         self.pos += 3;
         let mut extra = 0;
@@ -414,11 +417,7 @@ impl Parser {
     }
 
     fn skip_first_newline(&mut self) {
-        if self.peek() == Some('\n') {
-            self.pos += 1;
-        } else if self.peek() == Some('\r') && self.peek_at(1) == Some('\n') {
-            self.pos += 2;
-        }
+        self.eat_newline();
     }
 
     fn escape(&mut self) -> Res<char> {
@@ -450,41 +449,45 @@ fn is_control(c: char) -> bool {
     (c.is_control() && c != '\t') || c == '\u{7f}'
 }
 
+fn is_scalar_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '_' | '.' | ':')
+}
+
 fn is_bare(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '-'
 }
 
 fn parse_int(word: &str) -> Option<i64> {
-    let (neg, body) = match word.as_bytes().first()? {
+    let (negative, body) = match word.as_bytes().first()? {
         b'+' => (false, &word[1..]),
         b'-' => (true, &word[1..]),
         _ => (false, word),
     };
+    let unsigned = body.len() == word.len();
     let (radix, digits) = match body.get(..2) {
-        Some("0x") if !neg && word.len() == body.len() => (16, &body[2..]),
-        Some("0o") if !neg && word.len() == body.len() => (8, &body[2..]),
-        Some("0b") if !neg && word.len() == body.len() => (2, &body[2..]),
+        Some("0x") if unsigned => (16, &body[2..]),
+        Some("0o") if unsigned => (8, &body[2..]),
+        Some("0b") if unsigned => (2, &body[2..]),
         _ => (10, body),
     };
-    if digits.is_empty()
-        || digits.starts_with('_')
-        || digits.ends_with('_')
-        || digits.contains("__")
-    {
+
+    let bad_underscores = digits.starts_with('_') || digits.ends_with('_') || digits.contains("__");
+    if digits.is_empty() || bad_underscores {
         return None;
     }
-    if radix == 10 && digits.len() > 1 && digits.starts_with('0') {
+    let leading_zero = radix == 10 && digits.len() > 1 && digits.starts_with('0');
+    if leading_zero {
         return None;
     }
+
     let clean: String = digits.chars().filter(|&c| c != '_').collect();
     if clean.is_empty() || !clean.bytes().all(|b| b.is_ascii_alphanumeric()) {
         return None;
     }
     let n = i64::from_str_radix(&clean, radix).ok()?;
-    if neg { n.checked_neg() } else { Some(n) }
+    if negative { n.checked_neg() } else { Some(n) }
 }
 
-/// Digits with single underscores between them; returns the rest of the input.
 fn scan_digits(s: &str) -> Option<&str> {
     let bytes = s.as_bytes();
     if !bytes.first()?.is_ascii_digit() {
@@ -501,7 +504,6 @@ fn scan_digits(s: &str) -> Option<&str> {
     Some(&s[i..])
 }
 
-/// `[+-] int [. digits] [e [+-] digits]` with at least a fraction or an exponent, finite.
 fn is_float(word: &str) -> bool {
     let body = word.strip_prefix(['+', '-']).unwrap_or(word);
     let int_len = body
@@ -534,53 +536,76 @@ fn is_float(word: &str) -> bool {
     has_part && rest.is_empty() && clean.parse::<f64>().is_ok_and(f64::is_finite)
 }
 
-fn digits(s: &str, len: usize) -> Option<u32> {
-    (s.len() == len && s.bytes().all(|b| b.is_ascii_digit())).then(|| s.parse().ok())?
+fn fixed_digits(s: &str, len: usize) -> Option<u32> {
+    if s.len() != len || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    s.parse().ok()
+}
+
+fn split3(s: &str, sep: char) -> Option<(&str, &str, &str)> {
+    let mut parts = s.split(sep);
+    let (a, b, c) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((a, b, c))
+}
+
+fn is_leap_year(year: u32) -> bool {
+    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
 }
 
 fn is_date(word: &str) -> bool {
-    let mut parts = word.split('-');
-    let (Some(y), Some(m), Some(d), None) =
-        (parts.next(), parts.next(), parts.next(), parts.next())
+    let Some((y, m, d)) = split3(word, '-') else {
+        return false;
+    };
+    let (Some(year), Some(month), Some(day)) =
+        (fixed_digits(y, 4), fixed_digits(m, 2), fixed_digits(d, 2))
     else {
         return false;
     };
-    let (Some(y), Some(m), Some(d)) = (digits(y, 4), digits(m, 2), digits(d, 2)) else {
-        return false;
-    };
-    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
-    let max = match m {
+    let days_in_month = match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
-        2 if leap => 29,
+        2 if is_leap_year(year) => 29,
         2 => 28,
         _ => return false,
     };
-    (1..=max).contains(&d)
+    (1..=days_in_month).contains(&day)
 }
 
-/// `hh:mm:ss` with optional `.fraction`.
 fn is_time(word: &str) -> bool {
-    let (clock, frac) = match word.split_once('.') {
-        Some((c, f)) => (c, Some(f)),
+    let (clock, fraction) = match word.split_once('.') {
+        Some((clock, fraction)) => (clock, Some(fraction)),
         None => (word, None),
     };
-    if frac.is_some_and(|f| f.is_empty() || !f.bytes().all(|b| b.is_ascii_digit())) {
+    if let Some(fraction) = fraction
+        && (fraction.is_empty() || !fraction.bytes().all(|b| b.is_ascii_digit()))
+    {
         return false;
     }
-    let mut parts = clock.split(':');
-    let (Some(h), Some(m), Some(s), None) =
-        (parts.next(), parts.next(), parts.next(), parts.next())
+    let Some((h, m, s)) = split3(clock, ':') else {
+        return false;
+    };
+    let (Some(hour), Some(minute), Some(second)) =
+        (fixed_digits(h, 2), fixed_digits(m, 2), fixed_digits(s, 2))
     else {
         return false;
     };
-    matches!(
-        (digits(h, 2), digits(m, 2), digits(s, 2)),
-        (Some(h), Some(m), Some(s)) if h < 24 && m < 60 && s <= 60
-    )
+    hour < 24 && minute < 60 && second <= 60
 }
 
-/// Local or offset date, time, or date-time (`T` / `t` separated).
+fn is_utc_offset(offset: &str) -> bool {
+    let Some((h, m)) = offset.split_once(':') else {
+        return false;
+    };
+    match (fixed_digits(h, 2), fixed_digits(m, 2)) {
+        (Some(hour), Some(minute)) => hour < 24 && minute < 60,
+        _ => false,
+    }
+}
+
 fn valid_datetime(word: &str) -> bool {
     if is_date(word) || is_time(word) {
         return true;
@@ -592,28 +617,15 @@ fn valid_datetime(word: &str) -> bool {
     if !is_date(date) {
         return false;
     }
-    let time = match rest.strip_suffix(['Z', 'z']) {
-        Some(time) => time,
-        None => match rest.rfind(['+', '-']) {
-            Some(i) => {
-                let (time, offset) = (&rest[..i], &rest[i + 1..]);
-                let ok = matches!(
-                    offset.split_once(':'),
-                    Some((h, m)) if matches!((digits(h, 2), digits(m, 2)), (Some(h), Some(m)) if h < 24 && m < 60)
-                );
-                if !ok {
-                    return false;
-                }
-                time
-            }
-            None => rest,
-        },
-    };
-    is_time(time)
+    if let Some(time) = rest.strip_suffix(['Z', 'z']) {
+        return is_time(time);
+    }
+    match rest.rfind(['+', '-']) {
+        Some(i) => is_time(&rest[..i]) && is_utc_offset(&rest[i + 1..]),
+        None => is_time(rest),
+    }
 }
 
-/// Walks (creating as needed) to the table at `path`; an array of tables resolves to its
-/// last element.
 fn table_at<'a>(root: &'a mut Table, path: &[String]) -> Res<&'a mut Table> {
     let mut table = root;
     for key in path {
@@ -632,7 +644,6 @@ fn table_at<'a>(root: &'a mut Table, path: &[String]) -> Res<&'a mut Table> {
     Ok(table)
 }
 
-/// Like [`table_at`] for a `[header]`, which may not name an array of tables.
 fn define_table(root: &mut Table, path: &[String]) -> Res<()> {
     let (last, parents) = path.split_last().ok_or(ParseError)?;
     match table_at(root, parents)?
@@ -644,7 +655,6 @@ fn define_table(root: &mut Table, path: &[String]) -> Res<()> {
     }
 }
 
-/// Appends a fresh table to the array of tables at `path`, creating the array if needed.
 fn push_element(root: &mut Table, path: &[String]) -> Res<()> {
     let (last, parents) = path.split_last().ok_or(ParseError)?;
     let parent = table_at(root, parents)?;
@@ -660,7 +670,6 @@ fn push_element(root: &mut Table, path: &[String]) -> Res<()> {
     }
 }
 
-/// Inserts `value` at a dotted `path`, rejecting duplicates.
 fn insert(table: &mut Table, path: &[String], value: Value) -> Res<()> {
     let (last, parents) = path.split_last().ok_or(ParseError)?;
     let table = table_at(table, parents)?;

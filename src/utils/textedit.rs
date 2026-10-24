@@ -10,18 +10,28 @@ fn is_word(c: char) -> bool {
     !c.is_whitespace()
 }
 
+fn line_start_before(chars: &[char], end: usize) -> usize {
+    for i in (0..end).rev() {
+        if chars[i] == '\n' {
+            return i + 1;
+        }
+    }
+    0
+}
+
+fn line_end_from(chars: &[char], from: usize) -> usize {
+    for (i, &c) in chars.iter().enumerate().skip(from) {
+        if c == '\n' {
+            return i;
+        }
+    }
+    chars.len()
+}
+
 fn line_bounds(chars: &[char], cursor: usize) -> (usize, usize) {
     let cursor = cursor.min(chars.len());
-    let start = chars[..cursor]
-        .iter()
-        .rposition(|&c| c == '\n')
-        .map(|i| i + 1)
-        .unwrap_or(0);
-    let end = chars[cursor..]
-        .iter()
-        .position(|&c| c == '\n')
-        .map(|i| cursor + i)
-        .unwrap_or(chars.len());
+    let start = line_start_before(chars, cursor);
+    let end = line_end_from(chars, cursor);
     (start, end)
 }
 
@@ -80,11 +90,7 @@ pub fn move_up(s: &str, cursor: usize) -> usize {
     }
     let col = cursor - start;
     let prev_end = start - 1;
-    let prev_start = chars[..prev_end]
-        .iter()
-        .rposition(|&c| c == '\n')
-        .map(|i| i + 1)
-        .unwrap_or(0);
+    let prev_start = line_start_before(&chars, prev_end);
     (prev_start + col).min(last_pos_of(prev_start, prev_end))
 }
 
@@ -101,11 +107,7 @@ pub fn move_down(s: &str, cursor: usize) -> usize {
     }
     let col = cursor - start;
     let next_start = end + 1;
-    let next_end = chars[next_start..]
-        .iter()
-        .position(|&c| c == '\n')
-        .map(|i| next_start + i)
-        .unwrap_or(n);
+    let next_end = line_end_from(&chars, next_start);
     (next_start + col).min(last_pos_of(next_start, next_end))
 }
 
@@ -133,11 +135,7 @@ pub fn caret_up(s: &str, cursor: usize) -> usize {
     }
     let col = cursor - start;
     let prev_end = start - 1;
-    let prev_start = chars[..prev_end]
-        .iter()
-        .rposition(|&c| c == '\n')
-        .map(|i| i + 1)
-        .unwrap_or(0);
+    let prev_start = line_start_before(&chars, prev_end);
     (prev_start + col).min(prev_end)
 }
 
@@ -151,11 +149,7 @@ pub fn caret_down(s: &str, cursor: usize) -> usize {
     }
     let col = cursor - start;
     let next_start = end + 1;
-    let next_end = chars[next_start..]
-        .iter()
-        .position(|&c| c == '\n')
-        .map(|i| next_start + i)
-        .unwrap_or(n);
+    let next_end = line_end_from(&chars, next_start);
     (next_start + col).min(next_end)
 }
 

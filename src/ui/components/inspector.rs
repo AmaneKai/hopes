@@ -1,6 +1,6 @@
 use crate::{
     domain::{AppState, Priority, Status},
-    ui::{Component, KeyResult, theme::Theme},
+    ui::{Component, KeyResult, hashtags, theme::Theme},
 };
 use chrono::Local;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -115,14 +115,7 @@ fn draw_task_details(f: &mut Frame, state: &AppState, area: Rect, is_focused: bo
     let tags = if item.tags.is_empty() {
         vec![Span::styled("Empty", Theme::muted())]
     } else {
-        vec![Span::styled(
-            item.tags
-                .iter()
-                .map(|t| format!("#{t}"))
-                .collect::<Vec<_>>()
-                .join(", "),
-            Theme::tag(),
-        )]
+        vec![Span::styled(hashtags(&item.tags, ", "), Theme::tag())]
     };
     lines.push(property("Tags", tags));
 
@@ -177,18 +170,12 @@ fn draw_analytics(f: &mut Frame, state: &AppState, area: Rect) {
         (Priority::Medium, stats.medium),
         (Priority::Low, stats.low),
     ];
-    let prio_line = property(
-        "Priority",
-        prio_counts
-            .into_iter()
-            .flat_map(|(priority, count)| {
-                [
-                    Theme::priority_marker(priority),
-                    Span::raw(format!("{count}  ")),
-                ]
-            })
-            .collect(),
-    );
+    let mut prio_spans = Vec::new();
+    for (priority, count) in prio_counts {
+        prio_spans.push(Theme::priority_marker(priority));
+        prio_spans.push(Span::raw(format!("{count}  ")));
+    }
+    let prio_line = property("Priority", prio_spans);
 
     let para = Paragraph::new(vec![progress_line, counts_line, prio_line]).block(block);
     f.render_widget(para, area);
@@ -202,19 +189,14 @@ fn draw_audit_trail(f: &mut Frame, state: &AppState, area: Rect) {
     let lines: Vec<Line> = if visible_rows == 0 {
         Vec::new()
     } else {
-        let mut entries: Vec<Line> = state
-            .audit
-            .recent(visible_rows)
-            .map(|event| {
-                Line::from(vec![
-                    Span::styled(
-                        format!("{} ", event.timestamp.format("%H:%M")),
-                        Theme::muted(),
-                    ),
-                    Span::raw(event.message.as_str()),
-                ])
-            })
-            .collect();
+        let mut entries: Vec<Line> = Vec::new();
+        for event in state.audit.recent(visible_rows) {
+            let time = format!("{} ", event.timestamp.format("%H:%M"));
+            entries.push(Line::from(vec![
+                Span::styled(time, Theme::muted()),
+                Span::raw(event.message.as_str()),
+            ]));
+        }
 
         if entries.is_empty() {
             entries.push(Line::from(Span::styled(

@@ -18,19 +18,18 @@ pub struct NavComponent {
 }
 
 impl NavComponent {
-    /// Points the cursor at whatever the restored filter selects.
     pub fn restore(&mut self, state: &AppState) {
-        let tag = state
-            .tag_filter
-            .as_deref()
-            .and_then(|f| f.strip_prefix('#'));
-        self.index = match tag.and_then(|tag| state.tags().iter().position(|(t, _)| t == tag)) {
-            Some(i) => NavSection::ALL.len() + i,
-            None => NavSection::ALL
-                .iter()
-                .position(|s| *s == state.nav_section)
-                .unwrap_or(0),
-        };
+        if let Some(filter) = &state.tag_filter
+            && let Some(tag) = filter.strip_prefix('#')
+            && let Some(i) = state.tags().iter().position(|(t, _)| t == tag)
+        {
+            self.index = NavSection::ALL.len() + i;
+            return;
+        }
+        self.index = 0;
+        if let Some(i) = NavSection::ALL.iter().position(|s| *s == state.nav_section) {
+            self.index = i;
+        }
     }
 
     fn total(state: &AppState) -> usize {
@@ -46,7 +45,8 @@ impl NavComponent {
     }
 
     fn apply(&self, state: &AppState) -> Option<Action> {
-        self.target(state).map(Action::ApplyNav)
+        let target = self.target(state)?;
+        Some(Action::ApplyNav(target))
     }
 }
 

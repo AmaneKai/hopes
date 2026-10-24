@@ -1,6 +1,3 @@
-//! Differential tests: the small parser must agree with the real `toml` crate on everything
-//! `config.toml` could plausibly contain, and on mutated garbage.
-
 use hopes::{
     config::{Backend, Config},
     utils::mini_toml::{self, Value},
@@ -129,7 +126,6 @@ fn rejects_what_toml_rejects() {
     }
 }
 
-/// Deterministic mutation fuzzing: delete / replace / insert one char in valid documents.
 #[test]
 fn agrees_with_toml_on_mutated_documents() {
     let alphabet: Vec<char> = "=[]{}\",'#.\n \\_-+:0aZ9\t".chars().collect();
