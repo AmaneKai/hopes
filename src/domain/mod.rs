@@ -250,6 +250,12 @@ impl AppState {
         }
     }
 
+    pub fn status_deadline(&self) -> Option<Instant> {
+        let (_, set_at) = self.status_message.as_ref()?;
+        let deadline = *set_at + STATUS_TTL;
+        (deadline > Instant::now()).then_some(deadline)
+    }
+
     #[inline(always)]
     pub fn log(&mut self, message: impl Into<String>) {
         self.audit.push(message);

@@ -4,7 +4,10 @@ use std::{
     cell::Cell,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::mpsc::{self, Receiver, RecvTimeoutError, Sender},
+    sync::{
+        Arc, OnceLock,
+        mpsc::{self, Receiver, RecvTimeoutError, Sender},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -33,8 +36,26 @@ pub enum SyncStatus {
     Error(String),
 }
 
+type Waker = Box<dyn Fn() + Send + Sync>;
+
+struct Notifier {
+    tx: Sender<SyncStatus>,
+    waker: Arc<OnceLock<Waker>>,
+}
+
+impl Notifier {
+    fn send(&self, status: SyncStatus) {
+        if self.tx.send(status).is_ok()
+            && let Some(wake) = self.waker.get()
+        {
+            wake();
+        }
+    }
+}
+
 pub struct SyncEngine {
     tx: Sender<SyncRequest>,
+    waker: Arc<OnceLock<Waker>>,
     rx: Receiver<SyncStatus>,
     data_dir: PathBuf,
     remote: String,
@@ -54,6 +75,7 @@ impl SyncEngine {
     ) -> Self {
         let (req_tx, req_rx) = mpsc::channel::<SyncRequest>();
         let (status_tx, status_rx) = mpsc::channel::<SyncStatus>();
+        let waker = Arc::new(OnceLock::new());
         let (engine_dir, engine_remote, engine_branch) =
             (data_dir.clone(), remote.clone(), branch.clone());
 
@@ -61,6 +83,7 @@ impl SyncEngine {
             let _ = status_tx.send(SyncStatus::Disabled);
             return Self {
                 tx: req_tx,
+                waker,
                 rx: status_rx,
                 data_dir: engine_dir,
                 remote: engine_remote,
@@ -70,6 +93,10 @@ impl SyncEngine {
             };
         }
 
+        let status_tx = Notifier {
+            tx: status_tx,
+            waker: Arc::clone(&waker),
+        };
         thread::spawn(move || {
             worker_loop(
                 data_dir,
@@ -84,6 +111,7 @@ impl SyncEngine {
 
         Self {
             tx: req_tx,
+            waker,
             rx: status_rx,
             data_dir: engine_dir,
             remote: engine_remote,
@@ -91,6 +119,10 @@ impl SyncEngine {
             dirty: Cell::new(false),
             enabled: true,
         }
+    }
+
+    pub fn set_waker(&self, waker: impl Fn() + Send + Sync + 'static) {
+        let _ = self.waker.set(Box::new(waker));
     }
 
     #[inline(always)]
@@ -152,43 +184,47 @@ pub const FLUSH_ARG: &str = "--sync-flush";
 
 pub fn flush(dir: &Path, remote: &str, branch: &str) {
     let (tx, _rx) = mpsc::channel::<SyncStatus>();
+    let tx = Notifier {
+        tx,
+        waker: Arc::default(),
+    };
     do_push(dir, remote, branch, &tx);
 }
 
-fn do_pull(dir: &Path, remote: &str, branch: &str, tx: &Sender<SyncStatus>) {
-    let _ = tx.send(SyncStatus::Syncing("Pulling...".into()));
+fn do_pull(dir: &Path, remote: &str, branch: &str, tx: &Notifier) {
+    tx.send(SyncStatus::Syncing("Pulling...".into()));
     match git::pull_rebase(dir, remote, branch) {
         Ok(()) => {
-            let _ = tx.send(SyncStatus::UpdatedRemoteData);
+            tx.send(SyncStatus::UpdatedRemoteData);
         }
         Err(git::GitError::Offline) => {
-            let _ = tx.send(SyncStatus::Offline);
+            tx.send(SyncStatus::Offline);
         }
         Err(git::GitError::Conflict) => {
             handle_conflict(dir, remote, branch, tx);
         }
         Err(e) => {
-            let _ = tx.send(SyncStatus::Error(e.to_string()));
+            tx.send(SyncStatus::Error(e.to_string()));
         }
     }
 }
 
-fn handle_conflict(dir: &Path, remote: &str, branch: &str, tx: &Sender<SyncStatus>) {
+fn handle_conflict(dir: &Path, remote: &str, branch: &str, tx: &Notifier) {
     match git::resolve_conflict_keep_remote(dir, remote, branch) {
         Ok(backup) => {
-            let _ = tx.send(SyncStatus::Conflict(backup.display().to_string()));
+            tx.send(SyncStatus::Conflict(backup.display().to_string()));
         }
         Err(e) => {
-            let _ = tx.send(SyncStatus::Error(e.to_string()));
+            tx.send(SyncStatus::Error(e.to_string()));
         }
     }
 }
 
-fn report(tx: &Sender<SyncStatus>, status: SyncStatus) {
-    let _ = tx.send(status);
+fn report(tx: &Notifier, status: SyncStatus) {
+    tx.send(status);
 }
 
-fn push_outcome(result: Result<(), git::GitError>, tx: &Sender<SyncStatus>) -> bool {
+fn push_outcome(result: Result<(), git::GitError>, tx: &Notifier) -> bool {
     match result {
         Ok(()) => {
             report(tx, SyncStatus::Synced);
@@ -205,7 +241,7 @@ fn push_outcome(result: Result<(), git::GitError>, tx: &Sender<SyncStatus>) -> b
     }
 }
 
-fn rebase_and_push(dir: &Path, remote: &str, branch: &str, tx: &Sender<SyncStatus>) -> bool {
+fn rebase_and_push(dir: &Path, remote: &str, branch: &str, tx: &Notifier) -> bool {
     report(tx, SyncStatus::Syncing("Pulling...".into()));
     match git::pull_rebase(dir, remote, branch) {
         Ok(()) => push_outcome(git::push(dir, remote, branch), tx),
@@ -217,7 +253,7 @@ fn rebase_and_push(dir: &Path, remote: &str, branch: &str, tx: &Sender<SyncStatu
     }
 }
 
-fn do_push(dir: &Path, remote: &str, branch: &str, tx: &Sender<SyncStatus>) -> bool {
+fn do_push(dir: &Path, remote: &str, branch: &str, tx: &Notifier) -> bool {
     report(tx, SyncStatus::Syncing("Committing...".into()));
     if let Err(e) = git::stage_and_commit(dir, "sync: update tasks") {
         report(tx, SyncStatus::Error(e.to_string()));
@@ -242,23 +278,28 @@ fn worker_loop(
     debounce: Duration,
     pull_on_startup: bool,
     rx: Receiver<SyncRequest>,
-    tx: Sender<SyncStatus>,
+    tx: Notifier,
 ) {
     if pull_on_startup {
         do_pull(&data_dir, &remote, &branch, &tx);
     } else {
-        let _ = tx.send(SyncStatus::Idle);
+        tx.send(SyncStatus::Idle);
     }
 
     let mut pending_since: Option<Instant> = None;
     if git::has_unsynced_changes(&data_dir, &remote, &branch) {
-        let _ = tx.send(SyncStatus::Syncing("Pending sync...".into()));
+        tx.send(SyncStatus::Syncing("Pending sync...".into()));
         pending_since = Some(Instant::now());
     }
 
     loop {
-        let due = pending_since.is_some_and(|started| started.elapsed() >= debounce);
-        match rx.recv_timeout(Duration::from_millis(100)) {
+        let request = match pending_since {
+            Some(started) => {
+                rx.recv_timeout((started + debounce).saturating_duration_since(Instant::now()))
+            }
+            None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
+        };
+        match request {
             Ok(SyncRequest::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
             Ok(SyncRequest::SchedulePush) => {
                 pending_since = Some(Instant::now());
@@ -268,9 +309,7 @@ fn worker_loop(
                 pending_since = retry_deadline(do_push(&data_dir, &remote, &branch, &tx));
             }
             Err(RecvTimeoutError::Timeout) => {
-                if due {
-                    pending_since = retry_deadline(do_push(&data_dir, &remote, &branch, &tx));
-                }
+                pending_since = retry_deadline(do_push(&data_dir, &remote, &branch, &tx));
             }
         }
     }

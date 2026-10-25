@@ -132,7 +132,11 @@ impl App {
     }
 
     pub fn run(&mut self, terminal: &mut Tui) -> io::Result<()> {
-        let events = EventHandler::new(60);
+        let events = EventHandler::new();
+        let wake = events.sender();
+        self.sync_engine.set_waker(move || {
+            let _ = wake.send(Event::Wake);
+        });
         let mut needs_draw = true;
 
         loop {
@@ -145,14 +149,18 @@ impl App {
                 return Ok(());
             }
 
-            if needs_draw || self.state.status().is_some() {
+            if needs_draw {
                 terminal.draw(|f| self.render(f))?;
                 needs_draw = false;
             }
 
-            if let Event::Key(key) = events.next()? {
-                needs_draw = true;
-                self.handle_key(key);
+            match events.next(self.state.status_deadline())? {
+                Some(Event::Key(key)) => {
+                    needs_draw = true;
+                    self.handle_key(key);
+                }
+                Some(Event::Resize) | None => needs_draw = true,
+                Some(Event::Wake) => {}
             }
         }
     }
