@@ -37,20 +37,23 @@ enum {
 #define MEDIUM_COLS 80
 #define BAR_BG 236
 #define KEY_ESCAPE 27
+#define MAX_DUE_COLS 16
 
 static WINDOW *win;
 static int term_w, term_h, ncolors;
-static bool color_ok;
-static bool pair_ready[40];
+static int color_ok;
+static int pair_ready[40];
 static int bar_bg;
 
 static Rect clip;
-static bool dry;
+static int dry;
+
+static Day today;
 
 static Point caret;
-static bool caret_on;
+static int caret_on;
 
-static At fg(int color, bool bar)
+static At fg(int color, int bar)
 {
     At extra = 0;
     int idx;
@@ -64,38 +67,48 @@ static At fg(int color, bool bar)
     idx = color + 2 + (bar ? 18 : 0);
     if (!pair_ready[idx]) {
         init_pair((short)idx, (short)color, (short)(bar ? bar_bg : -1));
-        pair_ready[idx] = true;
+        pair_ready[idx] = 1;
     }
     return COLOR_PAIR(idx) | extra;
 }
 
 static At at_muted(void)
 {
-    return fg(C_DARK, false);
+    return fg(C_DARK, 0);
 }
 
 static At at_section(void)
 {
-    return fg(C_DARK, false) | A_BOLD;
+    return fg(C_DARK, 0) | A_BOLD;
 }
 
 static At at_tag(void)
 {
-    return fg(C_CYAN, false);
+    return fg(C_CYAN, 0);
 }
 
 static At at_prio(int p)
 {
     static const int colors[] = {C_LIGHT_RED, C_RED, C_YELLOW, C_DARK};
 
-    return fg(colors[p], false);
+    return fg(colors[p], 0);
+}
+
+static At at_due(Urgency u)
+{
+    switch (u) {
+    case U_OVERDUE: return fg(C_RED, 0) | A_BOLD;
+    case U_TODAY: return fg(C_YELLOW, 0) | A_BOLD;
+    case U_SOON: return fg(C_YELLOW, 0);
+    default: return at_muted();
+    }
 }
 
 static At at_status(int s)
 {
     static const int colors[] = {C_DARK, C_CYAN, C_GREEN};
 
-    return fg(colors[s], false);
+    return fg(colors[s], 0);
 }
 
 static void measure_screen(void)
@@ -159,6 +172,28 @@ static int putn(int y, int x, int maxx, At at, const char *s, size_t n)
 static int put(int y, int x, int maxx, At at, const char *s)
 {
     return putn(y, x, maxx, at, s, strlen(s));
+}
+
+static int put_fit(int y, int x, int w, At at, const char *s)
+{
+    size_t len = strlen(s), i = 0;
+    int cols = 0;
+
+    if (w <= 0)
+        return x;
+    if (u8_width(s, len) <= w)
+        return put(y, x, x + w, at, s);
+    while (i < len) {
+        uint32_t cp;
+        int n = u8_dec(s + i, len - i, &cp), cw = u8_cp_width(cp);
+
+        if (cols + cw > w - 1)
+            break;
+        cols += cw;
+        i += (size_t)n;
+    }
+    putn(y, x, x + w, at, s, i);
+    return put(y, x + cols, x + w, at, "…");
 }
 
 static void fill(int y, int x, int w, At at)
@@ -239,13 +274,13 @@ static int measure(int w, const char *s)
 {
     int rows;
 
-    dry = true;
+    dry = 1;
     rows = put_wrap(0, 0, w, A_NORMAL, s);
-    dry = false;
+    dry = 0;
     return rows;
 }
 
-static Rect pane(Rect r, const char *title, At title_at, bool focused)
+static Rect pane(Rect r, const char *title, At title_at, int focused)
 {
     At border = focused ? A_NORMAL : at_muted();
     int x;
@@ -259,7 +294,7 @@ static Rect pane(Rect r, const char *title, At title_at, bool focused)
     return (Rect){r.x + 2, r.y + 1, r.w > 3 ? r.w - 3 : 0, r.h > 1 ? r.h - 1 : 0};
 }
 
-static At pane_title(bool focused)
+static At pane_title(int focused)
 {
     return focused ? A_BOLD : at_section();
 }
@@ -301,16 +336,16 @@ static const char *sync_text(At *at)
     case SY_DISABLED: return NULL;
     case SY_IDLE: return "Idle";
     case SY_SYNCING:
-        *at = fg(C_YELLOW, false);
+        *at = fg(C_YELLOW, 0);
         return A.sync_msg;
     case SY_SYNCED:
     case SY_UPDATED: return "Synced";
     case SY_OFFLINE: return "Offline";
     case SY_CONFLICT:
-        *at = fg(C_RED, false) | A_BOLD;
+        *at = fg(C_RED, 0) | A_BOLD;
         return "Conflict";
     default:
-        *at = fg(C_RED, false) | A_BOLD;
+        *at = fg(C_RED, 0) | A_BOLD;
         return "Sync error";
     }
 }
@@ -362,7 +397,7 @@ static void nav_row(int y, Rect r, const char *prefix, const char *label, At at,
     put(y, x + (gap > 1 ? gap : 1), r.x + r.w, at_muted(), num);
 }
 
-static const char *cursor_prefix(bool is_cursor, bool is_current)
+static const char *cursor_prefix(int is_cursor, int is_current)
 {
     return is_cursor ? "> " : is_current ? "● " : "  ";
 }
@@ -374,11 +409,12 @@ static int nav_count(int section)
     case NAV_TODO: return A.stats.todo;
     case NAV_WIP: return A.stats.wip;
     case NAV_DONE: return A.stats.done;
+    case NAV_OVERDUE: return A.stats.overdue;
     default: return A.stats.prio[P_URGENT];
     }
 }
 
-static void draw_nav_tags(int y, Rect r, bool focused)
+static void draw_nav_tags(int y, Rect r, int focused)
 {
     int shown = len_of(A.tags) < NAV_TAGS_SHOWN ? len_of(A.tags) : NAV_TAGS_SHOWN;
 
@@ -386,9 +422,9 @@ static void draw_nav_tags(int y, Rect r, bool focused)
         put(y, r.x, r.x + r.w, at_muted(), "  No tags yet");
     for (int i = 0; i < shown; i++) {
         const char *name = A.tags[i].name;
-        bool current = A.filter && !strcmp(A.filter[0] == '#' ? A.filter + 1 : A.filter, name);
-        bool cursor = focused && A.nav_idx == NAV_COUNT + i;
-        At at = current || cursor ? fg(C_CYAN, false) | A_BOLD : at_tag();
+        int current = A.filter && !strcmp(A.filter[0] == '#' ? A.filter + 1 : A.filter, name);
+        int cursor = focused && A.nav_idx == NAV_COUNT + i;
+        At at = current || cursor ? fg(C_CYAN, 0) | A_BOLD : at_tag();
         char label[96];
 
         snprintf(label, sizeof label, "#%s", name);
@@ -396,14 +432,14 @@ static void draw_nav_tags(int y, Rect r, bool focused)
     }
 }
 
-static void draw_nav(Rect area, bool focused)
+static void draw_nav(Rect area, int focused)
 {
     Rect r = pane(area, "Navigator", pane_title(focused), focused);
     int y = r.y + 1;
 
     put(y++, r.x, r.x + r.w, at_section(), "  Views");
     for (int i = 0; i < NAV_COUNT; i++) {
-        bool current = (int)A.section == i && !A.filter, cursor = focused && A.nav_idx == i;
+        int current = (int)A.section == i && !A.filter, cursor = focused && A.nav_idx == i;
 
         nav_row(y++, r, cursor_prefix(cursor, current), nav_label(i), current || cursor ? A_BOLD : A_NORMAL,
                 nav_count(i));
@@ -434,34 +470,104 @@ static void table_scroll(int rows)
         A.tbl_off = n > rows ? n - rows : 0;
 }
 
-static void draw_table_row(int y, Rect r, int row, int title_w, int tag_w)
+static int due_text(const Item *it, char *out, size_t cap, Urgency *u)
+{
+    Window w;
+    char label[32];
+
+    if (it->status == ST_DONE || !item_window(it, &w))
+        return 0;
+    window_label(&w, today, label, sizeof label);
+    snprintf(out, cap, "%s%s", it->repeat.kind != R_NONE ? "↻ " : "", label);
+    *u = window_urgency(&w, today);
+    return 1;
+}
+
+static void tags_text(const Item *it, char *out, size_t cap, const char *sep)
+{
+    out[0] = 0;
+    for (int t = 0; t < len_of(it->tags) && strlen(out) < cap - 40; t++)
+        snprintf(out + strlen(out), cap - strlen(out), "%s#%s", t ? sep : "", it->tags[t]);
+}
+
+typedef struct {
+    int title, due, tags;
+} Columns;
+
+static void draw_table_row(int y, Rect r, int row, Columns c)
 {
     const Item *it = &A.items[A.vis[row]];
-    bool sel = row == A.tbl_sel, done = it->status == ST_DONE;
+    int sel = row == A.tbl_sel, done = it->status == ST_DONE;
     At bold = sel ? A_BOLD : A_NORMAL;
-    char prio[24], tags[160] = "";
+    char prio[24], tags[160], due[64];
+    Urgency u = U_LATER;
     int x = r.x + 2;
 
     put(y, r.x, r.x + r.w, bold, sel ? "> " : "  ");
     put(y, x, x + 2, at_status(it->status) | bold, status_badge(it->status));
     x += 3;
-    put(y, x, x + title_w, (done ? at_muted() : A_NORMAL) | bold, it->title);
-    x += title_w + 1;
+    put_fit(y, x, c.title, (done ? at_muted() : A_NORMAL) | bold, it->title);
+    x += c.title + 1;
+    if (c.due) {
+        if (due_text(it, due, sizeof due, &u))
+            put_fit(y, x, c.due, at_due(u) | bold, due);
+        x += c.due + 1;
+    }
     if (!done) {
         snprintf(prio, sizeof prio, "%s %s", prio_glyph(it->prio), prio_short(it->prio));
         put(y, x, x + 7, at_prio(it->prio) | (it->prio <= P_HIGH ? A_BOLD : 0) | bold, prio);
     }
     x += 8;
-    for (int t = 0; t < len_of(it->tags) && strlen(tags) < sizeof tags - 40; t++)
-        snprintf(tags + strlen(tags), sizeof tags - strlen(tags), "%s#%s", t ? " " : "", it->tags[t]);
-    put(y, x, x + tag_w, at_tag() | bold, tags);
+    tags_text(it, tags, sizeof tags, " ");
+    put_fit(y, x, c.tags, at_tag() | bold, tags);
 }
 
-static void draw_table(Rect area, bool focused)
+static Columns widest_columns(void)
+{
+    static Columns cached;
+    static unsigned rev;
+    static Day day;
+    char text[160];
+    Urgency u;
+
+    if (rev == A.rev && day == today)
+        return cached;
+    cached = (Columns){0, 0, 0};
+    for (int i = 0; i < len_of(A.vis); i++) {
+        const Item *it = &A.items[A.vis[i]];
+        int w = due_text(it, text, sizeof text, &u) ? text_width(text) : 0;
+
+        cached.due = w > cached.due ? w : cached.due;
+        tags_text(it, text, sizeof text, " ");
+        w = text_width(text);
+        cached.tags = w > cached.tags ? w : cached.tags;
+    }
+    rev = A.rev;
+    day = today;
+    return cached;
+}
+
+static Columns table_columns(int avail)
+{
+    Columns c = widest_columns();
+
+    c.due = c.due < MAX_DUE_COLS ? c.due : MAX_DUE_COLS;
+    c.tags = c.tags < avail / 3 ? c.tags : avail / 3;
+    c.title = avail - 12 - c.tags - c.due - (c.due ? 1 : 0);
+    if (c.title < 12 && c.tags > 12 - c.title) {
+        c.tags -= 12 - c.title;
+        c.title = 12;
+    }
+    c.title = c.title < 1 ? 1 : c.title;
+    return c;
+}
+
+static void draw_table(Rect area, int focused)
 {
     char title[160];
     Rect r;
-    int avail, tag_w, title_w, n = len_of(A.vis);
+    Columns c;
+    int n = len_of(A.vis);
 
     if (A.filter)
         snprintf(title, sizeof title, "Tasks · %s · %d", A.filter, n);
@@ -476,21 +582,33 @@ static void draw_table(Rect area, bool focused)
         put(r.y, r.x + (pad > 0 ? pad : 0), r.x + r.w, at_muted(), msg);
         return;
     }
-    avail = r.w - 2;
-    tag_w = avail * 25 / 100;
-    title_w = avail - 2 - 7 - tag_w - 3;
-    if (title_w < 12 && tag_w > 12 - title_w)
-        tag_w -= 12 - title_w, title_w = 12;
-    if (title_w < 1)
-        title_w = 1;
+    c = table_columns(r.w - 2);
     table_scroll(r.h);
     for (int i = 0; i < r.h && A.tbl_off + i < n; i++)
-        draw_table_row(r.y + i, r, A.tbl_off + i, title_w, tag_w);
+        draw_table_row(r.y + i, r, A.tbl_off + i, c);
+}
+
+static int card_due(const Item *it, char *out, size_t cap, Urgency *u)
+{
+    Window w;
+    char label[32], rule[48];
+
+    if (it->status == ST_DONE || !item_window(it, &w))
+        return 0;
+    window_label(&w, today, label, sizeof label);
+    *u = window_urgency(&w, today);
+    repeat_format(&it->repeat, rule, sizeof rule);
+    snprintf(out, cap, "%s%s%s%s", *u == U_UPCOMING ? "" : "due ", label, rule[0] ? " ↻ " : "", rule);
+    return 1;
 }
 
 static int card_height(const Item *it, int w)
 {
-    return measure(w - 4, it->title) + (it->desc[0] != 0) + (len_of(it->tags) > 0) + 1;
+    char due[96];
+    Urgency u;
+
+    return measure(w - 4, it->title) + (it->desc[0] != 0) + card_due(it, due, sizeof due, &u) +
+           (len_of(it->tags) > 0) + 1;
 }
 
 static void kanban_scroll(int col, int rows, int w)
@@ -509,9 +627,10 @@ static void kanban_scroll(int col, int rows, int w)
     }
 }
 
-static int draw_card(int y, Rect r, const Item *it, bool selected)
+static int draw_card(int y, Rect r, const Item *it, int selected)
 {
-    char desc[64], tags[160] = "";
+    char desc[64], tags[160] = "", due[96];
+    Urgency u;
     int rows, x = r.x;
 
     put(y, x, x + 2, A_NORMAL, selected ? "> " : "  ");
@@ -522,6 +641,8 @@ static int draw_card(int y, Rect r, const Item *it, bool selected)
         snippet(desc, sizeof desc, it->desc, 32);
         put(y + rows++, x + 4, x + r.w, at_muted(), desc);
     }
+    if (card_due(it, due, sizeof due, &u))
+        put(y + rows++, x + 4, x + r.w, at_due(u), due);
     for (int t = 0; t < len_of(it->tags) && strlen(tags) < sizeof tags - 40; t++)
         snprintf(tags + strlen(tags), sizeof tags - strlen(tags), "#%s ", it->tags[t]);
     if (tags[0])
@@ -529,7 +650,7 @@ static int draw_card(int y, Rect r, const Item *it, bool selected)
     return rows + 1;
 }
 
-static void draw_kanban_column(Rect area, int col, bool active)
+static void draw_kanban_column(Rect area, int col, int active)
 {
     static const char *const names[] = {"To Do", "In Progress", "Completed"};
     static const char *const empty[] = {"Nothing to do", "Nothing in progress", "Nothing completed yet"};
@@ -539,7 +660,7 @@ static void draw_kanban_column(Rect area, int col, bool active)
     int y, n = len_of(A.col[col]);
 
     snprintf(title, sizeof title, "%s · %d", names[col], n);
-    r = pane(area, title, fg(colors[col], false) | A_BOLD, active);
+    r = pane(area, title, fg(colors[col], 0) | A_BOLD, active);
     if (!n) {
         put(r.y, r.x, r.x + r.w, at_muted(), empty[col]);
         return;
@@ -550,7 +671,7 @@ static void draw_kanban_column(Rect area, int col, bool active)
         y += draw_card(y, r, &A.items[A.col[col][i]], active && i == A.kb_cur[col]);
 }
 
-static void draw_kanban(Rect area, bool focused)
+static void draw_kanban(Rect area, int focused)
 {
     int w1 = area.w * 33 / 100, w2 = area.w * 34 / 100;
     Rect cols[3] = {
@@ -563,14 +684,48 @@ static void draw_kanban(Rect area, bool focused)
         draw_kanban_column(cols[c], c, focused && A.kb_col == c);
 }
 
-static void property(int y, Rect r, const char *name, At at, const char *value)
+static int property_key(int y, Rect r, const char *name)
 {
     char key[16];
-    int x;
 
     snprintf(key, sizeof key, "%-11s", name);
-    x = put(y, r.x, r.x + r.w, at_muted(), key);
-    put(y, x, r.x + r.w, at, value);
+    return put(y, r.x, r.x + r.w, at_muted(), key);
+}
+
+static void property(int y, Rect r, const char *name, At at, const char *value)
+{
+    put(y, property_key(y, r, name), r.x + r.w, at, value);
+}
+
+static void property_due(int y, Rect r, const Item *it)
+{
+    Window w;
+    char full[64], label[32], tail[48];
+    int x = property_key(y, r, "Due");
+
+    if (!item_window(it, &w)) {
+        put(y, x, r.x + r.w, at_muted(), "None");
+        return;
+    }
+    window_full_label(&w, full, sizeof full);
+    window_label(&w, today, label, sizeof label);
+    snprintf(tail, sizeof tail, "· %s", label);
+    x = put(y, x, r.x + r.w, A_NORMAL, full);
+    x = put(y, x, r.x + r.w, A_NORMAL, " ");
+    put(y, x, r.x + r.w, it->status == ST_DONE ? at_muted() : at_due(window_urgency(&w, today)), tail);
+}
+
+static void property_repeat(int y, Rect r, const Item *it)
+{
+    char rule[48], text[64];
+
+    if (it->repeat.kind == R_NONE) {
+        property(y, r, "Repeat", at_muted(), "None");
+        return;
+    }
+    repeat_format(&it->repeat, rule, sizeof rule);
+    snprintf(text, sizeof text, "↻ %s", rule);
+    property(y, r, "Repeat", A_NORMAL, text);
 }
 
 static int draw_details_body(int y, Rect r, const Item *it)
@@ -583,6 +738,8 @@ static int draw_details_body(int y, Rect r, const Item *it)
     property(y++, r, "Status", at_status(it->status), line);
     snprintf(line, sizeof line, "%s %s", prio_glyph(it->prio), prio_label(it->prio));
     property(y++, r, "Priority", at_prio(it->prio), line);
+    property_due(y++, r, it);
+    property_repeat(y++, r, it);
     for (int t = 0; t < len_of(it->tags) && strlen(tags) < sizeof tags - 40; t++)
         snprintf(tags + strlen(tags), sizeof tags - strlen(tags), "%s#%s", t ? ", " : "", it->tags[t]);
     property(y++, r, "Tags", tags[0] ? at_tag() : at_muted(), tags[0] ? tags : "Empty");
@@ -593,7 +750,7 @@ static int draw_details_body(int y, Rect r, const Item *it)
     return y - y0;
 }
 
-static void draw_details(Rect area, bool focused)
+static void draw_details(Rect area, int focused)
 {
     Rect r = pane(area, "Inspector", pane_title(focused), focused);
     int sel = app_selected();
@@ -610,13 +767,13 @@ static void draw_details(Rect area, bool focused)
 static void draw_progress(Rect area)
 {
     enum { BAR = 16 };
-    Rect r = pane(area, "Progress", pane_title(false), false);
+    Rect r = pane(area, "Progress", pane_title(0), 0);
     int filled = A.stats.percent * BAR / 100, x;
     char line[96];
 
     x = put(r.y, r.x, r.x + r.w, at_muted(), "Done       ");
     for (int i = 0; i < BAR; i++)
-        x = put(r.y, x, r.x + r.w, i < filled ? fg(C_GREEN, false) : at_muted(), "━");
+        x = put(r.y, x, r.x + r.w, i < filled ? fg(C_GREEN, 0) : at_muted(), "━");
     snprintf(line, sizeof line, " %d%%", A.stats.percent);
     put(r.y, x, r.x + r.w, at_muted(), line);
 
@@ -633,7 +790,7 @@ static void draw_progress(Rect area)
 
 static void draw_activity(Rect area)
 {
-    Rect r = pane(area, "Activity", pane_title(false), false);
+    Rect r = pane(area, "Activity", pane_title(0), 0);
 
     if (!A.naudit)
         put(r.y, r.x, r.x + r.w, at_muted(), "No activity yet this session");
@@ -649,7 +806,7 @@ static void draw_activity(Rect area)
     }
 }
 
-static void draw_inspector(Rect area, bool focused)
+static void draw_inspector(Rect area, int focused)
 {
     int fixed = 6 + 8, details = area.h - fixed, progress, activity;
 
@@ -698,7 +855,7 @@ static Point caret_cell(const char *s, size_t cursor)
     return p;
 }
 
-static void draw_field(Rect r, const String_Builder *b, const Text_Input *in, bool focused, const char *placeholder)
+static void draw_field(Rect r, const String_Builder *b, const Text_Input *in, int focused, const char *placeholder)
 {
     const char *s = sb_cstr(b);
     Point c = caret_cell(s, in->cursor);
@@ -723,19 +880,19 @@ static void draw_field(Rect r, const String_Builder *b, const Text_Input *in, bo
     }
     if (focused) {
         caret = (Point){r.x + c.x - left, r.y + c.y - top};
-        caret_on = true;
+        caret_on = 1;
     }
 }
 
-static void split_label(Rect row, const char *label, bool focused, Rect *value)
+static void split_label(Rect row, const char *label, int focused, Rect *value)
 {
     set_clip(row.x, row.y, row.w, row.h);
-    put(row.y, row.x, row.x + 2, fg(C_CYAN, false), focused ? "▍" : " ");
+    put(row.y, row.x, row.x + 2, fg(C_CYAN, 0), focused ? "▍" : " ");
     put(row.y, row.x + 2, row.x + 12, focused ? A_BOLD : at_muted(), label);
     *value = (Rect){row.x + 12, row.y, row.w - 12, row.h};
 }
 
-static void draw_editor_priority(Rect row, bool focused)
+static void draw_editor_priority(Rect row, int focused)
 {
     Rect v;
     int x;
@@ -750,10 +907,96 @@ static void draw_editor_priority(Rect row, bool focused)
     }
 }
 
+static void draw_preview(Rect row, const char *text, At at, Rect *input)
+{
+    int w = text_width(text);
+
+    *input = (Rect){row.x, row.y, row.w - (w ? w + 1 : 0), row.h};
+    put(row.y, row.x + row.w - w, row.x + row.w, at, text);
+}
+
+static void draw_editor_due(Rect row, int focused)
+{
+    Editor *e = &A.ed;
+    Window w;
+    char text[96] = "", full[64];
+    At at = at_muted();
+    Rect v, input;
+    int rc = window_parse(sb_cstr(&e->due), today, &w);
+
+    split_label(row, "Due", focused, &v);
+    if (rc < 0) {
+        snprintf(text, sizeof text, "not a date (try 10-30-26)");
+        at = fg(C_RED, 0);
+    } else if (rc > 0) {
+        window_full_label(&w, full, sizeof full);
+        snprintf(text, sizeof text, "→ %s", full);
+        at = window_urgency(&w, today) >= U_LATER ? at_muted() : at_due(window_urgency(&w, today));
+    }
+    draw_preview(v, text, at, &input);
+    draw_field(input, &e->due, &e->in, focused, "mm-dd-yy or mm-dd-yy..mm-dd-yy");
+}
+
+static void draw_editor_repeat(Rect row, int focused)
+{
+    Editor *e = &A.ed;
+    Repeat r;
+    char text[96] = "", rule[48];
+    At at = at_muted();
+    Rect v, input;
+
+    split_label(row, "Repeat", focused, &v);
+    if (repeat_parse(sb_cstr(&e->repeat), &r)) {
+        snprintf(text, sizeof text, "not a rule (try weekly, every fri, 2w)");
+        at = fg(C_RED, 0);
+    } else if (r.kind != R_NONE) {
+        repeat_format(&r, rule, sizeof rule);
+        snprintf(text, sizeof text, "↻ %s", rule);
+    }
+    draw_preview(v, text, at, &input);
+    draw_field(input, &e->repeat, &e->in, focused, "daily, weekly, every fri, 2w");
+}
+
+static void draw_tag_chips(Rect row, const char **sug)
+{
+    int target = ed_tag_target(), x = row.x + 12, n = len_of(sug);
+
+    for (int i = 0; i < n; i++) {
+        char chip[96];
+        int w = text_width(sug[i]) + 4;
+
+        if (i > 0 && x + w + 4 > row.x + row.w) {
+            snprintf(chip, sizeof chip, "+%d", n - i);
+            put(row.y, x, row.x + row.w, at_muted(), chip);
+            break;
+        }
+        snprintf(chip, sizeof chip, " #%s ", sug[i]);
+        x = put(row.y, x, row.x + row.w, at_tag() | (i == target ? A_REVERSE : 0), chip);
+        x = put(row.y, x, row.x + row.w, A_NORMAL, " ");
+    }
+}
+
+static void draw_editor_hint(Rect in, int picking)
+{
+    int y = in.y + in.h - 1;
+    int x = put(y, in.x, in.x + in.w, A_BOLD, "[Ctrl-s] ");
+
+    x = put(y, x, in.x + in.w, at_muted(), "save   ");
+    x = put(y, x, in.x + in.w, A_BOLD, "[Tab] ");
+    x = put(y, x, in.x + in.w, at_muted(), picking ? "complete   " : "next   ");
+    if (picking) {
+        x = put(y, x, in.x + in.w, A_BOLD, "[↑↓] ");
+        x = put(y, x, in.x + in.w, at_muted(), "pick   ");
+    }
+    x = put(y, x, in.x + in.w, A_BOLD, "[Esc] ");
+    put(y, x, in.x + in.w, at_muted(), "cancel");
+}
+
 static void draw_editor(void)
 {
     Editor *e = &A.ed;
-    Rect in = popup(e->edit_idx >= 0 ? "Edit task" : "New task", 68, 14), v;
+    Rect in = popup(e->edit_idx >= 0 ? "Edit task" : "New task", 68, 17), v;
+    const char **sug = ed_suggestions();
 
     split_label((Rect){in.x, in.y + 1, in.w, 1}, "Title", e->field == FF_TITLE, &v);
     draw_field(v, &e->title, &e->in, e->field == FF_TITLE, "Untitled");
@@ -764,19 +1007,14 @@ static void draw_editor(void)
     rule(in.y + 6, in.x, in.w, e->field == FF_DESC ? A_NORMAL : at_muted());
 
     draw_editor_priority((Rect){in.x, in.y + 8, in.w, 1}, e->field == FF_PRIO);
-    split_label((Rect){in.x, in.y + 9, in.w, 1}, "Tags", e->field == FF_TAGS, &v);
+    draw_editor_due((Rect){in.x, in.y + 9, in.w, 1}, e->field == FF_DUE);
+    draw_editor_repeat((Rect){in.x, in.y + 10, in.w, 1}, e->field == FF_REPEAT);
+    split_label((Rect){in.x, in.y + 11, in.w, 1}, "Tags", e->field == FF_TAGS, &v);
     draw_field(v, &e->tags, &e->in, e->field == FF_TAGS, "design, ui");
-
     set_clip(in.x, in.y, in.w, in.h);
-    {
-        int x = put(in.y + in.h - 1, in.x, in.x + in.w, A_BOLD, "[Ctrl-s] ");
-
-        x = put(in.y + in.h - 1, x, in.x + in.w, at_muted(), "save   ");
-        x = put(in.y + in.h - 1, x, in.x + in.w, A_BOLD, "[Tab] ");
-        x = put(in.y + in.h - 1, x, in.x + in.w, at_muted(), "next   ");
-        x = put(in.y + in.h - 1, x, in.x + in.w, A_BOLD, "[Esc] ");
-        put(in.y + in.h - 1, x, in.x + in.w, at_muted(), "cancel");
-    }
+    draw_tag_chips((Rect){in.x, in.y + 12, in.w, 1}, sug);
+    draw_editor_hint(in, len_of(sug) > 0);
+    arr_free(sug);
 }
 
 typedef struct {
@@ -792,7 +1030,7 @@ static const Help_Row HELP[] = {
     {"Ctrl-d / Ctrl-u", "Page down / up"},
     {"Tab", "Next pane"},
     {"v", "Switch table / board"},
-    {"s", "Cycle sort"},
+    {"s", "Cycle sort (incl. due date)"},
     {"Search", ""},
     {"/", "Find tasks"},
     {"t", "Cycle tag filter"},
@@ -810,6 +1048,8 @@ static const Help_Row HELP[] = {
     {"S / F5", "Sync now"},
     {"Editing", ""},
     {"Tab / Ctrl-j", "Next field"},
+    {"Due field", "mm-dd-yy or mm-dd-yy..mm-dd-yy"},
+    {"Repeat field", "weekly, every fri, 2w, weekdays"},
     {"Shift-Tab / Ctrl-k", "Previous field"},
     {"Ctrl-s", "Save"},
     {"Esc", "Normal mode, then cancel"},
@@ -827,7 +1067,7 @@ static const Help_Row HELP[] = {
 
 #define HELP_ROW_COUNT ((int)(sizeof HELP / sizeof *HELP))
 
-static bool is_help_heading(const Help_Row *row)
+static int is_help_heading(const Help_Row *row)
 {
     return !row->desc[0];
 }
@@ -897,28 +1137,28 @@ static void draw_status_line(int y)
     char pos[48], text[32];
     int x, rw;
 
-    fill(y, 0, term_w, fg(C_DEFAULT, true));
+    fill(y, 0, term_w, fg(C_DEFAULT, 1));
     snprintf(text, sizeof text, "  %s", labels[A.mode]);
-    x = put(y, 0, term_w, fg(colors[A.mode], true) | A_BOLD, text);
-    x = put(y, x, term_w, fg(C_DEFAULT, true), " ");
+    x = put(y, 0, term_w, fg(colors[A.mode], 1) | A_BOLD, text);
+    x = put(y, x, term_w, fg(C_DEFAULT, 1), " ");
     if (in) {
         const char *badge = in->insert ? "-- INSERT --" : in->anchor >= 0 ? "-- VISUAL --" : "-- NORMAL --";
         int color = in->insert ? C_GREEN : in->anchor >= 0 ? C_MAGENTA : C_YELLOW;
 
-        x = put(y, x, term_w, fg(color, true) | A_BOLD, badge);
-        x = put(y, x, term_w, fg(C_DEFAULT, true), " ");
+        x = put(y, x, term_w, fg(color, 1) | A_BOLD, badge);
+        x = put(y, x, term_w, fg(C_DEFAULT, 1), " ");
     }
     if (pending) {
-        x = put(y, x, term_w, fg(C_YELLOW, true), pending);
-        x = put(y, x, term_w, fg(C_DEFAULT, true), " ");
+        x = put(y, x, term_w, fg(C_YELLOW, 1), pending);
+        x = put(y, x, term_w, fg(C_DEFAULT, 1), " ");
     }
     if (A.status[0] && now_ms() < A.status_until)
-        put(y, x, term_w, fg(C_YELLOW, true), A.status);
+        put(y, x, term_w, fg(C_YELLOW, 1), A.status);
 
     snprintf(pos, sizeof pos, "%d / %d  ", app_position(),
              A.view == V_KANBAN ? len_of(A.col[A.kb_col]) : len_of(A.vis));
     rw = text_width(pos);
-    put(y, term_w - rw, term_w, fg(C_DARK, true), pos);
+    put(y, term_w - rw, term_w, fg(C_DARK, 1), pos);
 }
 
 typedef struct {
@@ -961,7 +1201,7 @@ static void draw_hints_inline(int y, const Hint *h, int n)
 static void draw_normal_hints(int y)
 {
     static const Hint main_hints[] = {{"e", "edit"}, {"Space", "toggle"}, {"dd", "delete"}};
-    static const Hint nav_hints[] = {{"Enter", "open"}, {"1-5", "jump"}};
+    static const Hint nav_hints[] = {{"Enter", "open"}, {"1-6", "jump"}};
     static const Hint insp_hints[] = {{"j/k", "scroll"}, {"Tab", "next pane"}};
     const Hint *ctx = A.focus == F_MAIN ? main_hints : A.focus == F_NAV ? nav_hints : insp_hints;
     int n = A.focus == F_MAIN ? 3 : 2, x;
@@ -1015,12 +1255,12 @@ static void draw_cmdline(int y)
 
     fill(y, 0, term_w, A_NORMAL);
     put(y, 0, 1, A_NORMAL, A.cmd.find ? "/" : ":");
-    draw_field(r, &A.cmd.buf, &A.cmd.in, true, "");
+    draw_field(r, &A.cmd.buf, &A.cmd.in, 1, "");
 }
 
 static void draw_body(Rect body)
 {
-    bool wide = body.w >= WIDE_COLS, medium = body.w >= MEDIUM_COLS;
+    int wide = body.w >= WIDE_COLS, medium = body.w >= MEDIUM_COLS;
     int side = wide ? body.w * 18 / 100 : 0;
     int insp = wide ? body.w * 34 / 100 : medium ? body.w * 40 / 100 : 0;
     Rect main_area = {body.x + side, body.y, body.w - side - insp, body.h};
@@ -1037,7 +1277,8 @@ static void draw_body(Rect body)
 
 void ui_render(void)
 {
-    caret_on = false;
+    caret_on = 0;
+    today = day_today();
     measure_screen();
     werase(win);
     if (term_h < 6 || term_w < 20) {
@@ -1102,7 +1343,7 @@ void ui_end(void)
     endwin();
 }
 
-static bool map_special(int code, Key *k)
+static int map_special(int code, Key *k)
 {
     static const struct {
         int from;
@@ -1118,33 +1359,33 @@ static bool map_special(int code, Key *k)
         if (table[i].from != code)
             continue;
         k->c = table[i].to;
-        return true;
+        return 1;
     }
-    return false;
+    return 0;
 }
 
-static bool map_char(wint_t ch, Key *k)
+static int map_char(wint_t ch, Key *k)
 {
     k->c = ch;
     if (ch == KEY_ESCAPE || ch == '\r' || ch == '\t' || ch == 8 || ch == 127) {
         k->c = ch == KEY_ESCAPE ? HK_ESC : ch == '\r' ? HK_ENTER : ch == '\t' ? HK_TAB : HK_BACKSPACE;
-        return true;
+        return 1;
     }
     if (ch >= 1 && ch <= 26) {
         k->c = 'a' + ch - 1;
-        k->ctrl = true;
+        k->ctrl = 1;
     }
-    return true;
+    return 1;
 }
 
-bool ui_read_input(void)
+int ui_read_input(void)
 {
     wint_t ch;
     int rc;
 
     while ((rc = wget_wch(win, &ch)) != ERR) {
-        Key k = {0, false};
-        bool ok;
+        Key k = {0, 0};
+        int ok;
 
 #ifdef PDCURSES
         if (rc == KEY_CODE_YES && (int)ch == KEY_RESIZE)
@@ -1155,7 +1396,7 @@ bool ui_read_input(void)
         if (ok)
             app_key(k);
         if (A.quit)
-            return true;
+            return 1;
     }
-    return true;
+    return 1;
 }

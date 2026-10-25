@@ -4,27 +4,27 @@
 #define OFFLINE_RETRY_MS 30000
 #define EVENT_LINE_MAX 320
 
-bool sync_enabled;
+int sync_enabled;
 
 static char *dir, *remote, *branch;
 static int debounce_ms;
-static bool pull_startup;
+static int pull_startup;
 static Sync_Cb cb;
 
-static bool worker_running;
+static int worker_running;
 static char line[EVENT_LINE_MAX];
 static size_t line_len;
-static bool dirty;
+static int dirty;
 static int64_t pending_at;
 static int64_t retry_at;
-static bool force_next;
-static bool quiet;
+static int force_next;
+static int quiet;
 
 typedef enum { G_OK, G_OFFLINE, G_CONFLICT, G_REJECTED, G_FAIL } Git_Rc;
 
 typedef struct {
     int rc;
-    char out[256], err[512];
+    char out[1024], err[4096];
 } Git_Out;
 
 static void copy_capped(char *dst, size_t cap, const String_Builder *sb)
@@ -61,15 +61,15 @@ static int git(Git_Out *o, ...)
     return o->rc;
 }
 
-static bool has(const char *hay, const char *needle)
+static int has(const char *hay, const char *needle)
 {
     for (; *hay; hay++)
         if (!strncasecmp(hay, needle, strlen(needle)))
-            return true;
-    return false;
+            return 1;
+    return 0;
 }
 
-static bool is_offline(const char *e)
+static int is_offline(const char *e)
 {
     return has(e, "could not resolve host") || has(e, "unable to access") ||
            has(e, "connection timed out") || has(e, "network is unreachable") ||
@@ -94,14 +94,14 @@ static Git_Rc classify(Git_Out *o, char *msg, size_t cap)
     return G_FAIL;
 }
 
-static bool has_unsynced(void)
+static int has_unsynced(void)
 {
     Git_Out o;
     char range[256];
 
     git(&o, "status", "--porcelain", "--", "items.json", NULL);
     if (o.rc == 0 && o.out[0])
-        return true;
+        return 1;
     snprintf(range, sizeof range, "%s/%s..HEAD", remote, branch);
     git(&o, "rev-list", "--count", range, NULL);
     return o.rc == 0 && atoi(o.out) > 0;
@@ -119,7 +119,9 @@ static size_t queue_len;
 static void emit_raw(const char *text, size_t n)
 {
     EnterCriticalSection(&queue_lock);
-    if (queue_len + n <= sizeof queue) {
+    if (queue_len + n > sizeof queue)
+        queue_len = 0;
+    if (n <= sizeof queue) {
         memcpy(queue + queue_len, text, n);
         queue_len += n;
     }
@@ -232,7 +234,7 @@ static void head_of(char *out, size_t cap)
     snprintf(out, cap, "%s", o.out);
 }
 
-static bool rebase_and_push(void)
+static int rebase_and_push(void)
 {
     Git_Out o;
     char msg[256], before[64], after[64];
@@ -244,7 +246,7 @@ static bool rebase_and_push(void)
     r = classify(&o, msg, sizeof msg);
     if (r == G_CONFLICT) {
         conflict_keep_remote();
-        return false;
+        return 0;
     }
     if (r == G_OK) {
         head_of(after, sizeof after);
@@ -254,14 +256,14 @@ static bool rebase_and_push(void)
         r = classify(&o, msg, sizeof msg);
     }
     switch (r) {
-    case G_OK: emit('Y', NULL); return false;
-    case G_OFFLINE: emit('O', NULL); return true;
-    case G_REJECTED: emit('E', "remote has newer commits"); return false;
-    default: emit('E', msg); return false;
+    case G_OK: emit('Y', NULL); return 0;
+    case G_OFFLINE: emit('O', NULL); return 1;
+    case G_REJECTED: emit('E', "remote has newer commits"); return 0;
+    default: emit('E', msg); return 0;
     }
 }
 
-static bool commit_local(void)
+static int commit_local(void)
 {
     Git_Out o;
 
@@ -269,27 +271,27 @@ static bool commit_local(void)
     git(NULL, "add", "items.json", NULL);
     git(&o, "commit", "-m", "sync: update tasks", NULL);
     if (o.rc == 0 || strstr(o.out, "nothing to commit") || strstr(o.err, "nothing to commit"))
-        return true;
+        return 1;
     emit('E', o.rc == -2 ? "git commit timed out" : o.err[0] ? o.err : "git commit failed");
-    return false;
+    return 0;
 }
 
-static bool do_push(bool full)
+static int do_push(int full)
 {
     Git_Out o;
     char msg[256];
 
     if (!commit_local())
-        return false;
+        return 0;
     if (full)
         return rebase_and_push();
     emit('S', "Pushing...");
     git(&o, "push", remote, branch, NULL);
     switch (classify(&o, msg, sizeof msg)) {
-    case G_OK: emit('Y', NULL); return false;
-    case G_OFFLINE: emit('O', NULL); return true;
+    case G_OK: emit('Y', NULL); return 0;
+    case G_OFFLINE: emit('O', NULL); return 1;
     case G_REJECTED: return rebase_and_push();
-    default: emit('E', msg); return false;
+    default: emit('E', msg); return 0;
     }
 }
 
@@ -341,7 +343,7 @@ static DWORD WINAPI worker_thread_main(LPVOID mode)
     return 0;
 }
 
-static bool worker_start(int mode)
+static int worker_start(int mode)
 {
     worker_thread = CreateThread(NULL, 0, worker_thread_main, (LPVOID)(intptr_t)mode, 0, NULL);
     return worker_thread != NULL;
@@ -400,13 +402,13 @@ static void detach_stdio(void)
     dup2(devnull, 2);
 }
 
-static bool worker_start(int mode)
+static int worker_start(int mode)
 {
     int p[2];
     pid_t pid;
 
     if (pipe(p))
-        return false;
+        return 0;
     fflush(NULL);
     pid = fork();
     if (pid == 0) {
@@ -419,11 +421,11 @@ static bool worker_start(int mode)
     close(p[1]);
     if (pid < 0) {
         close(p[0]);
-        return false;
+        return 0;
     }
     worker_pid = pid;
     event_fd = p[0];
-    return true;
+    return 1;
 }
 
 static void worker_reap(void)
@@ -445,8 +447,8 @@ static void flush_detached(void)
     if (fork() != 0)
         return;
     detach_stdio();
-    quiet = true;
-    do_push(false);
+    quiet = 1;
+    do_push(0);
     _exit(0);
 }
 
@@ -460,15 +462,15 @@ static void spawn(int mode)
 {
     if (worker_running || !worker_start(mode))
         return;
-    worker_running = true;
+    worker_running = 1;
     line_len = 0;
     if (mode == RUN_STARTUP)
         return;
     pending_at = 0;
-    force_next = false;
+    force_next = 0;
 }
 
-void sync_init(const char *d, const Config *c, bool enabled, Sync_Cb callback)
+void sync_init(const char *d, const Config *c, int enabled, Sync_Cb callback)
 {
     char gitdir[1100];
     struct stat st;
@@ -491,15 +493,15 @@ int sync_flush_main(const char *d, const char *r, const char *b)
     dir = xstrdup(d);
     remote = xstrdup(r);
     branch = xstrdup(b);
-    quiet = true;
-    do_push(false);
+    quiet = 1;
+    do_push(0);
     return 0;
 }
 
 static void worker_finished(void)
 {
     worker_reap();
-    worker_running = false;
+    worker_running = 0;
     sync_timers();
 }
 
@@ -523,7 +525,7 @@ static void handle_line(const char *l)
     case 'E': cb(SY_ERROR, m); break;
     case 'Q':
         pending_at = now_ms();
-        dirty = true;
+        dirty = 1;
         cb(SY_SYNCING, "Pending sync...");
         break;
     case 'Z': worker_finished(); break;
@@ -561,7 +563,7 @@ void sync_request_push(void)
 {
     if (!sync_enabled)
         return;
-    dirty = true;
+    dirty = 1;
     pending_at = now_ms();
     retry_at = 0;
     cb(SY_SYNCING, "Pending sync...");
@@ -571,8 +573,8 @@ void sync_force(void)
 {
     if (!sync_enabled)
         return;
-    force_next = true;
-    dirty = true;
+    force_next = 1;
+    dirty = 1;
     if (!pending_at)
         pending_at = now_ms();
     sync_timers();
@@ -597,8 +599,8 @@ int sync_timeout_ms(void)
 void sync_timers(void)
 {
     int64_t t = now_ms();
-    bool full = force_next;
-    bool due = full || (pending_at && t >= pending_at + debounce_ms) || (retry_at && t >= retry_at);
+    int full = force_next;
+    int due = full || (pending_at && t >= pending_at + debounce_ms) || (retry_at && t >= retry_at);
 
     if (!sync_enabled || worker_running || !due)
         return;
@@ -614,7 +616,7 @@ void sync_shutdown(void)
         return;
     if (worker_running)
         worker_abort();
-    worker_running = false;
+    worker_running = 0;
     if (dirty)
         flush_detached();
 }

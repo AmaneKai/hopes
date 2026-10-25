@@ -123,21 +123,72 @@ static int check_nesting(const char *path, char *text)
     return found;
 }
 
+static int is_word(char c)
+{
+    return c == '_' || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+static int banned_word(const char *s, size_t i)
+{
+    static const char *const words[] = {"bool", "true", "false", "stdbool"};
+
+    if (i && is_word(s[i - 1]))
+        return 0;
+    for (size_t w = 0; w < sizeof words / sizeof *words; w++) {
+        size_t n = strlen(words[w]);
+
+        if (!strncmp(s + i, words[w], n) && !is_word(s[i + n]))
+            return 1;
+    }
+    return 0;
+}
+
+static int check_types(const char *path, const char *text)
+{
+    int found = 0, line = 1;
+
+    for (size_t i = 0; text[i];) {
+        if (text[i] == '"' || text[i] == '\'') {
+            i = skip_literal(text, i);
+            continue;
+        }
+        if (starts_comment(text, i)) {
+            i = skip_comment(text, i);
+            continue;
+        }
+        if (banned_word(text, i)) {
+            printf("%s:%d: bool is a lie, use int\n", path, line);
+            found++;
+        }
+        line += text[i] == '\n';
+        i++;
+    }
+    return found;
+}
+
+static int run_check(const char *mode, const char *path, char *text)
+{
+    if (!strcmp(mode, "nesting"))
+        return check_nesting(path, text);
+    if (!strcmp(mode, "types"))
+        return check_types(path, text);
+    return check_comments(path, text);
+}
+
 int main(int argc, char **argv)
 {
-    int failed = 0, nesting;
+    int failed = 0;
 
-    if (argc < 3 || (strcmp(argv[1], "comments") && strcmp(argv[1], "nesting"))) {
-        fprintf(stderr, "usage: lint comments|nesting file...\n");
+    if (argc < 3 || (strcmp(argv[1], "comments") && strcmp(argv[1], "nesting") && strcmp(argv[1], "types"))) {
+        fprintf(stderr, "usage: lint comments|nesting|types file...\n");
         return 2;
     }
-    nesting = !strcmp(argv[1], "nesting");
     for (int i = 2; i < argc; i++) {
         char *text = is_vendored(argv[i]) ? NULL : slurp(argv[i]);
 
         if (!text)
             continue;
-        failed += nesting ? check_nesting(argv[i], text) : check_comments(argv[i], text);
+        failed += run_check(argv[1], argv[i], text);
         free(text);
     }
     return failed != 0;

@@ -4,7 +4,7 @@
 #define VERSION "0.1.0"
 
 static volatile sig_atomic_t stop;
-static bool dirty;
+static int dirty;
 
 static void on_signal(int sig)
 {
@@ -15,7 +15,7 @@ static void on_signal(int sig)
 static void on_sync(Sync_Kind kind, const char *msg)
 {
     app_sync_status(kind, msg);
-    dirty = true;
+    dirty = 1;
 }
 
 static int next_deadline(void)
@@ -36,19 +36,19 @@ static void expire_status(void)
     if (!A.status[0] || now_ms() < A.status_until)
         return;
     A.status[0] = 0;
-    dirty = true;
+    dirty = 1;
 }
 
-static bool wait_for_event(void)
+static int wait_for_event(void)
 {
     int events = plat_wait(next_deadline(), sync_handle());
 
     if (stop || (events & PLAT_HUP))
-        return false;
+        return 0;
     if (events & PLAT_SYNC)
         sync_pump();
     ui_read_input();
-    dirty = true;
+    dirty = 1;
     expire_status();
     sync_timers();
     return !A.quit;
@@ -85,22 +85,25 @@ int main(int argc, char **argv)
     }
     sync_init(store_dir(), &cfg, cfg.sync_enabled && cfg.backend == BE_JSON, on_sync);
     app_init(&cfg);
+    view_load();
+    heap_trim();
 
     signal(SIGTERM, on_signal);
 #ifdef SIGHUP
     signal(SIGHUP, on_signal);
 #endif
     ui_init();
-    dirty = true;
+    dirty = 1;
     for (;;) {
         if (dirty) {
             ui_render();
-            dirty = false;
+            dirty = 0;
         }
         if (!wait_for_event())
             break;
     }
     ui_end();
+    view_save();
     app_shutdown();
     return 0;
 }

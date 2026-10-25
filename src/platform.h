@@ -12,11 +12,16 @@ int64_t now_ms(void)
     return (int64_t)GetTickCount64();
 }
 
-char *plat_base_dir(bool config)
+char *plat_base_dir(int config)
 {
     const char *env = getenv(config ? "APPDATA" : "LOCALAPPDATA");
 
     return xstrdup(env ? env : ".");
+}
+
+char *plat_state_dir(void)
+{
+    return plat_base_dir(0);
 }
 
 void plat_mkdir(const char *path)
@@ -55,7 +60,7 @@ int plat_wait(int timeout_ms, intptr_t sync_handle)
 
 static void quote_arg(String_Builder *cmd, const char *arg)
 {
-    bool plain = *arg && !strpbrk(arg, " \t\"");
+    int plain = *arg && !strpbrk(arg, " \t\"");
 
     if (cmd->count)
         sb_putc(cmd, ' ');
@@ -175,7 +180,7 @@ int64_t now_ms(void)
 }
 
 #ifdef __APPLE__
-char *plat_base_dir(bool config)
+char *plat_base_dir(int config)
 {
     const char *home = getenv("HOME");
     size_t n = strlen(home ? home : ".") + 32;
@@ -185,8 +190,13 @@ char *plat_base_dir(bool config)
     snprintf(p, n, "%s/Library/Application Support", home ? home : ".");
     return p;
 }
+
+char *plat_state_dir(void)
+{
+    return plat_base_dir(0);
+}
 #else
-char *plat_base_dir(bool config)
+char *plat_base_dir(int config)
 {
     const char *env = getenv(config ? "XDG_CONFIG_HOME" : "XDG_DATA_HOME");
     const char *home = getenv("HOME");
@@ -197,6 +207,20 @@ char *plat_base_dir(bool config)
         return xstrdup(env);
     p = xmalloc(n);
     snprintf(p, n, "%s/%s", home ? home : ".", config ? ".config" : ".local/share");
+    return p;
+}
+
+char *plat_state_dir(void)
+{
+    const char *env = getenv("XDG_STATE_HOME");
+    const char *home = getenv("HOME");
+    size_t n = strlen(home ? home : ".") + 24;
+    char *p;
+
+    if (env && env[0] == '/')
+        return xstrdup(env);
+    p = xmalloc(n);
+    snprintf(p, n, "%s/.local/state", home ? home : ".");
     return p;
 }
 #endif
@@ -281,7 +305,7 @@ static int service(struct pollfd *p, String_Builder *sb, size_t limit)
     return 0;
 }
 
-static bool pump_outputs(pid_t pid, int out_fd, int err_fd, String_Builder *out, String_Builder *err,
+static int pump_outputs(pid_t pid, int out_fd, int err_fd, String_Builder *out, String_Builder *err,
                          size_t limit, int timeout_ms)
 {
     struct pollfd fds[2] = {{out_fd, POLLIN, 0}, {err_fd, POLLIN, 0}};
@@ -293,13 +317,13 @@ static bool pump_outputs(pid_t pid, int out_fd, int err_fd, String_Builder *out,
 
         if (timeout_ms >= 0 && left <= 0) {
             kill(pid, SIGKILL);
-            return true;
+            return 1;
         }
         if (poll(fds, 2, timeout_ms < 0 ? -1 : (int)left) < 0 && errno != EINTR)
             break;
         open_fds -= service(&fds[0], out, limit) + service(&fds[1], err, limit);
     }
-    return false;
+    return 0;
 }
 
 static void feed_stdin(int fd, const String_Builder *input)
@@ -324,7 +348,7 @@ int plat_run(char *const argv[], const char *dir, const String_Builder *input, S
              String_Builder *err, size_t limit, int timeout_ms)
 {
     int in[2] = {-1, -1}, po[2], pe[2], status = 0;
-    bool timed_out;
+    int timed_out;
     pid_t pid;
 
     if (pipe(po) || pipe(pe) || (input && pipe(in)))

@@ -2,7 +2,7 @@
 
 char *default_data_dir(void)
 {
-    char *base = plat_base_dir(false);
+    char *base = plat_base_dir(0);
     size_t n = strlen(base) + 8;
     char *p = xmalloc(n);
 
@@ -16,7 +16,7 @@ static char *config_path(void)
     const char *env = getenv("HOPES_CONFIG");
     if (env && *env)
         return xstrdup(env);
-    char *b = plat_base_dir(true);
+    char *b = plat_base_dir(1);
     size_t n = strlen(b) + 24;
     char *p = xmalloc(n);
     snprintf(p, n, "%s/hopes/config.toml", b);
@@ -83,10 +83,10 @@ static void parse_array(Config *c, char *p)
 
 static void assign(Config *c, const char *section, const char *key, char *val)
 {
-    bool is_sync = !strcmp(section, "sync"), is_store = !strcmp(section, "storage");
-    bool isstr = *val == '"' || *val == '\'';
+    int is_sync = !strcmp(section, "sync"), is_store = !strcmp(section, "storage");
+    int isstr = *val == '"' || *val == '\'';
     char *sv = isstr ? parse_str(&val) : NULL;
-    bool b = !strncmp(val, "true", 4);
+    int b = !strncmp(val, "true", 4);
 
     if (is_sync) {
         if (!strcmp(key, "enabled"))
@@ -120,7 +120,7 @@ static char *join_array(char *val, char **next)
     sb_set(&joined, val);
     while (*next && **next) {
         char *nl = strchr(*next, '\n');
-        bool done;
+        int done;
 
         if (nl)
             *nl = 0;
@@ -174,11 +174,11 @@ static void parse_toml(Config *c, char *text)
 void config_load(Config *c)
 {
     memset(c, 0, sizeof *c);
-    c->sync_enabled = true;
+    c->sync_enabled = 1;
     c->debounce = 5;
     c->remote = xstrdup("origin");
     c->branch = xstrdup("main");
-    c->pull_on_startup = true;
+    c->pull_on_startup = 1;
 
     char *path = config_path();
     FILE *f = fopen(path, "r");

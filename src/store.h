@@ -49,8 +49,10 @@ static int open_sqlite(void)
         "CREATE TABLE IF NOT EXISTS items (position INTEGER PRIMARY KEY, data TEXT NOT NULL)";
 
     snprintf(db_path, sizeof db_path, "%s/hopes.db", dir);
-    if (sqlite3_open(db_path, &db) == SQLITE_OK && sqlite3_exec(db, schema, 0, 0, 0) == SQLITE_OK)
+    if (sqlite3_open(db_path, &db) == SQLITE_OK && sqlite3_exec(db, schema, 0, 0, 0) == SQLITE_OK) {
+        sqlite3_busy_timeout(db, 2000);
         return 0;
+    }
     snprintf(err_msg, sizeof err_msg, "sqlite: %s", db ? sqlite3_errmsg(db) : "open failed");
 #else
     snprintf(err_msg, sizeof err_msg, "sqlite backend not compiled in; rebuild with `make SQLITE=1`");
@@ -167,58 +169,77 @@ static int save_exec(const Item *v)
     String_Builder b = {0};
     int rc;
 
-    json_dump(&b, v, len_of(v), false);
+    json_dump(&b, v, len_of(v), 0);
     rc = run_exec("save", &b, NULL);
     sb_free(&b);
     return rc;
 }
 
 #ifdef HOPES_SQLITE
+static int sqlite_fail(void)
+{
+    snprintf(err_msg, sizeof err_msg, "sqlite: %s", db ? sqlite3_errmsg(db) : "not open");
+    return -1;
+}
+
 static int load_sqlite(Item **v)
 {
     String_Builder b = {0};
     sqlite3_stmt *st;
     int rc;
 
-    if (sqlite3_prepare_v2(db, "SELECT data FROM items ORDER BY position", -1, &st, 0) != SQLITE_OK) {
-        snprintf(err_msg, sizeof err_msg, "sqlite: %s", sqlite3_errmsg(db));
-        return -1;
-    }
+    if (sqlite3_prepare_v2(db, "SELECT data FROM items ORDER BY position", -1, &st, 0) != SQLITE_OK)
+        return sqlite_fail();
     sb_putc(&b, '[');
-    while (sqlite3_step(st) == SQLITE_ROW) {
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        const char *text = (const char *)sqlite3_column_text(st, 0);
+
         if (b.count > 1)
             sb_putc(&b, ',');
-        sb_append(&b, (const char *)sqlite3_column_text(st, 0), (size_t)sqlite3_column_bytes(st, 0));
+        if (text)
+            sb_append(&b, text, (size_t)sqlite3_column_bytes(st, 0));
     }
+    if (rc != SQLITE_DONE)
+        sqlite_fail();
     sqlite3_finalize(st);
     sb_putc(&b, ']');
-    rc = parse_items(&b, v);
+    rc = rc == SQLITE_DONE ? parse_items(&b, v) : -1;
     sb_free(&b);
     return rc;
+}
+
+static int insert_items(sqlite3_stmt *st, const Item *v, String_Builder *b)
+{
+    for (int i = 0; i < len_of(v); i++) {
+        sb_clear(b);
+        json_dump(b, &v[i], 1, 0);
+        sqlite3_bind_int(st, 1, i);
+        if (sqlite3_bind_text(st, 2, b->data + 1, (int)b->count - 2, SQLITE_TRANSIENT) != SQLITE_OK ||
+            sqlite3_step(st) != SQLITE_DONE)
+            return -1;
+        sqlite3_reset(st);
+    }
+    return 0;
 }
 
 static int save_sqlite(const Item *v)
 {
     String_Builder b = {0};
-    sqlite3_stmt *st;
-    int rc;
+    sqlite3_stmt *st = NULL;
+    int rc = -1;
 
-    sqlite3_exec(db, "BEGIN", 0, 0, 0);
-    sqlite3_exec(db, "DELETE FROM items", 0, 0, 0);
-    sqlite3_prepare_v2(db, "INSERT INTO items (position, data) VALUES (?1, ?2)", -1, &st, 0);
-    for (int i = 0; i < len_of(v); i++) {
-        sb_clear(&b);
-        json_dump(&b, &v[i], 1, false);
-
-        sqlite3_bind_int(st, 1, i);
-        sqlite3_bind_text(st, 2, b.data + 1, (int)b.count - 2, SQLITE_TRANSIENT);
-        sqlite3_step(st);
-        sqlite3_reset(st);
-    }
-    sqlite3_finalize(st);
-    rc = sqlite3_exec(db, "COMMIT", 0, 0, 0) == SQLITE_OK ? 0 : -1;
+    if (sqlite3_exec(db, "BEGIN IMMEDIATE", 0, 0, 0) != SQLITE_OK)
+        return sqlite_fail();
+    if (sqlite3_exec(db, "DELETE FROM items", 0, 0, 0) == SQLITE_OK &&
+        sqlite3_prepare_v2(db, "INSERT INTO items (position, data) VALUES (?1, ?2)", -1, &st, 0) == SQLITE_OK)
+        rc = insert_items(st, v, &b);
     if (rc)
-        snprintf(err_msg, sizeof err_msg, "sqlite: %s", sqlite3_errmsg(db));
+        sqlite_fail();
+    sqlite3_finalize(st);
+    if (!rc && sqlite3_exec(db, "COMMIT", 0, 0, 0) != SQLITE_OK)
+        rc = sqlite_fail();
+    if (rc)
+        sqlite3_exec(db, "ROLLBACK", 0, 0, 0);
     sb_free(&b);
     return rc;
 }
@@ -233,6 +254,10 @@ static int load_json(Item **v)
     *v = NULL;
     if (fd < 0)
         return errno == ENOENT ? 0 : fail(path);
+    struct stat st;
+
+    if (!fstat(fd, &st) && st.st_size > 0)
+        sb_reserve(&b, (size_t)st.st_size);
     rc = read_all(fd, &b);
     close(fd);
     if (rc) {
@@ -255,7 +280,7 @@ static int save_json(const Item *v)
     String_Builder b = {0};
     int fd, rc;
 
-    json_dump(&b, v, len_of(v), true);
+    json_dump(&b, v, len_of(v), 1);
     fd = open(tmp_path, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, 0644);
     if (fd < 0) {
         sb_free(&b);

@@ -32,9 +32,9 @@ HEADERS := $(wildcard src/*.h)
 SOURCES := $(filter-out src/amane.h,$(HEADERS)) src/main.c tests/tests.c
 
 ifeq ($(UNAME),Darwin)
-SIZE_BUDGET ?= 72000
+SIZE_BUDGET ?= 90000
 else
-SIZE_BUDGET ?= 63000
+SIZE_BUDGET ?= 79000
 endif
 
 all: $(BIN)
@@ -68,6 +68,7 @@ $(BUILD)/lint: scripts/lint.c | $(BUILD)
 lint: $(BUILD)/lint
 	$(BUILD)/lint comments $(SOURCES)
 	$(BUILD)/lint nesting $(SOURCES)
+	$(BUILD)/lint types $(SOURCES)
 
 strict:
 	$(CC) -std=gnu11 -Wall -Wextra -Werror -Wno-unused-function -Isrc $(CFLAGS_STRICT) -fsyntax-only src/main.c

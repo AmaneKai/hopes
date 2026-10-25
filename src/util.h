@@ -34,6 +34,15 @@ char *xstrndup(const char *s, size_t n)
     return r;
 }
 
+void heap_trim(void)
+{
+#ifdef __APPLE__
+    malloc_zone_pressure_relief(NULL, 0);
+#elif defined(__GLIBC__)
+    malloc_trim(0);
+#endif
+}
+
 char *xstrdup(const char *s) { return xstrndup(s, strlen(s)); }
 
 void snippet(char *out, size_t cap, const char *title, int max)

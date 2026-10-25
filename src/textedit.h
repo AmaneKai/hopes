@@ -5,7 +5,7 @@
 static size_t nxt(const String_Builder *b, size_t i) { return u8_next(S(b), b->count, i); }
 static size_t prv(const String_Builder *b, size_t i) { return u8_prev(S(b), i); }
 
-static bool is_word(const String_Builder *b, size_t i)
+static int is_word(const String_Builder *b, size_t i)
 {
     unsigned char c = (unsigned char)S(b)[i];
     return !(c == ' ' || (c >= 9 && c <= 13));
@@ -257,7 +257,7 @@ size_t te_insert_line_end(const String_Builder *b, size_t cur)
     return lend(b, min_z(cur, last_char(b)));
 }
 
-size_t te_open_below(String_Builder *b, size_t cur, bool allow_nl)
+size_t te_open_below(String_Builder *b, size_t cur, int allow_nl)
 {
     if (!allow_nl)
         return te_insert_line_end(b, cur);
@@ -266,7 +266,7 @@ size_t te_open_below(String_Builder *b, size_t cur, bool allow_nl)
     return en + 1;
 }
 
-size_t te_open_above(String_Builder *b, size_t cur, bool allow_nl)
+size_t te_open_above(String_Builder *b, size_t cur, int allow_nl)
 {
     if (!allow_nl)
         return te_line_start(b, cur);
@@ -328,31 +328,31 @@ size_t te_delete_word_back(String_Builder *b, size_t cur)
 void ti_init(Text_Input *t)
 {
     memset(t, 0, sizeof *t);
-    t->insert = true;
+    t->insert = 1;
     t->anchor = -1;
 }
 
 void ti_focus(Text_Input *t, const String_Builder *b)
 {
-    t->insert = true;
-    t->pending_d = false;
+    t->insert = 1;
+    t->pending_d = 0;
     t->anchor = -1;
     t->cursor = b->count;
 }
 
-bool ti_esc(Text_Input *t, String_Builder *b)
+int ti_esc(Text_Input *t, String_Builder *b)
 {
     if (t->insert) {
-        t->insert = false;
-        t->pending_d = false;
+        t->insert = 0;
+        t->pending_d = 0;
         t->cursor = te_clamp_normal(b, t->cursor);
-        return true;
+        return 1;
     }
     if (t->anchor >= 0) {
         t->anchor = -1;
-        return true;
+        return 1;
     }
-    return false;
+    return 0;
 }
 
 static void ti_set_clip(Text_Input *t, char *s)
@@ -361,7 +361,7 @@ static void ti_set_clip(Text_Input *t, char *s)
     t->clip = s;
 }
 
-static void insert_key(Text_Input *t, String_Builder *b, Key k, bool allow_nl)
+static void insert_key(Text_Input *t, String_Builder *b, Key k, int allow_nl)
 {
     if (k.ctrl) {
         if (k.c == 'w')
@@ -402,7 +402,7 @@ static void insert_key(Text_Input *t, String_Builder *b, Key k, bool allow_nl)
     }
 }
 
-static bool motion(Text_Input *t, String_Builder *b, Key k, bool allow_nl)
+static int motion(Text_Input *t, String_Builder *b, Key k, int allow_nl)
 {
     size_t c = t->cursor;
     switch (k.c) {
@@ -417,13 +417,13 @@ static bool motion(Text_Input *t, String_Builder *b, Key k, bool allow_nl)
     case 'j':
     case HK_DOWN:
         if (!allow_nl)
-            return false;
+            return 0;
         c = te_move_down(b, c);
         break;
     case 'k':
     case HK_UP:
         if (!allow_nl)
-            return false;
+            return 0;
         c = te_move_up(b, c);
         break;
     case '0':
@@ -442,13 +442,13 @@ static bool motion(Text_Input *t, String_Builder *b, Key k, bool allow_nl)
         c = te_word_back(b, c);
         break;
     default:
-        return false;
+        return 0;
     }
     t->cursor = c;
-    return true;
+    return 1;
 }
 
-static void visual_key(Text_Input *t, String_Builder *b, Key k, bool allow_nl)
+static void visual_key(Text_Input *t, String_Builder *b, Key k, int allow_nl)
 {
     if (k.c == 'v') {
         t->anchor = -1;
@@ -475,14 +475,14 @@ static void visual_key(Text_Input *t, String_Builder *b, Key k, bool allow_nl)
     }
 }
 
-void ti_key(Text_Input *t, String_Builder *b, Key k, bool allow_nl)
+void ti_key(Text_Input *t, String_Builder *b, Key k, int allow_nl)
 {
     if (t->insert) {
         insert_key(t, b, k, allow_nl);
         return;
     }
     if (t->pending_d) {
-        t->pending_d = false;
+        t->pending_d = 0;
         if (k.c == 'd' && !k.ctrl) {
             t->cursor = te_delete_line(b, t->cursor);
             return;
@@ -499,7 +499,7 @@ void ti_key(Text_Input *t, String_Builder *b, Key k, bool allow_nl)
     const char *clip = t->clip ? t->clip : "";
     switch (k.c) {
     case 'd':
-        t->pending_d = true;
+        t->pending_d = 1;
         break;
     case 'v':
         t->anchor = (long)t->cursor;
@@ -518,27 +518,27 @@ void ti_key(Text_Input *t, String_Builder *b, Key k, bool allow_nl)
         break;
     case 'i':
         t->cursor = te_clamp_normal(b, t->cursor);
-        t->insert = true;
+        t->insert = 1;
         break;
     case 'a':
         t->cursor = te_insert_after(b, t->cursor);
-        t->insert = true;
+        t->insert = 1;
         break;
     case 'I':
         t->cursor = te_line_start(b, t->cursor);
-        t->insert = true;
+        t->insert = 1;
         break;
     case 'A':
         t->cursor = te_insert_line_end(b, t->cursor);
-        t->insert = true;
+        t->insert = 1;
         break;
     case 'o':
         t->cursor = te_open_below(b, t->cursor, allow_nl);
-        t->insert = true;
+        t->insert = 1;
         break;
     case 'O':
         t->cursor = te_open_above(b, t->cursor, allow_nl);
-        t->insert = true;
+        t->insert = 1;
         break;
     }
 }
