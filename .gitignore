@@ -1,5 +1,2 @@
-/target
-**/*.rs.bk
-*.tmp
-items.json
-
+build/
+compile_commands.json
