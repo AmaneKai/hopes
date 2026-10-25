@@ -432,34 +432,17 @@ static inline size_t u8_chars(const char *s, size_t count)
 }
 
 #ifdef _WIN32
-static inline int u8_in_ranges(uint32_t cp, const uint32_t (*ranges)[2], size_t count)
-{
-    for (size_t j = 0; j < count; j++)
-        if (cp >= ranges[j][0] && cp <= ranges[j][1])
-            return 1;
-
-    return 0;
-}
+int PDC_wcwidth(int32_t ucs);
 
 static inline int u8_cp_width(uint32_t cp)
 {
-    static const uint32_t zero[][2] = {
-        {0x0300, 0x036F}, {0x200B, 0x200F}, {0x20D0, 0x20FF}, {0xFE00, 0xFE0F},
-    };
-    static const uint32_t wide[][2] = {
-        {0x1100, 0x115F},   {0x2E80, 0x303E},   {0x3041, 0x33FF},   {0x3400, 0x4DBF},
-        {0x4E00, 0x9FFF},   {0xA000, 0xA4CF},   {0xAC00, 0xD7A3},   {0xF900, 0xFAFF},
-        {0xFE30, 0xFE6F},   {0xFF00, 0xFF60},   {0xFFE0, 0xFFE6},   {0x1F300, 0x1F64F},
-        {0x1F900, 0x1F9FF}, {0x20000, 0x3FFFD},
-    };
+    int w;
 
     if (cp < 0x300)
         return 1;
 
-    if (u8_in_ranges(cp, zero, sizeof zero / sizeof *zero))
-        return 0;
-
-    return u8_in_ranges(cp, wide, sizeof wide / sizeof *wide) ? 2 : 1;
+    w = PDC_wcwidth((int32_t)cp);
+    return w < 0 ? 1 : w;
 }
 #else
 static inline int u8_cp_width(uint32_t cp)

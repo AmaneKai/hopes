@@ -191,6 +191,7 @@ void config_load(Config *c)
     while ((n = fread(chunk, 1, sizeof chunk, f)) > 0)
         sb_append(&b, chunk, n);
     fclose(f);
+    text_normalize(&b);
     if (b.data)
         parse_toml(c, b.data);
     sb_free(&b);

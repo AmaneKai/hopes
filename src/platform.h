@@ -2,9 +2,24 @@
 
 #ifdef _WIN32
 
+#define CONSOLE_GRACE_MS 4000
+
+static HANDLE wake_event;
+
+static BOOL WINAPI on_console_event(DWORD type)
+{
+    if (type == CTRL_C_EVENT)
+        return TRUE;
+    SetEvent(wake_event);
+    Sleep(CONSOLE_GRACE_MS);
+    return TRUE;
+}
+
 void plat_init(void)
 {
     SetEnvironmentVariableA("GIT_TERMINAL_PROMPT", "0");
+    wake_event = CreateEventA(NULL, TRUE, FALSE, NULL);
+    SetConsoleCtrlHandler(on_console_event, TRUE);
 }
 
 int64_t now_ms(void)
@@ -46,21 +61,29 @@ void plat_localtime(time_t t, struct tm *out)
 
 int plat_wait(int timeout_ms, intptr_t sync_handle)
 {
-    HANDLE handles[2] = {GetStdHandle(STD_INPUT_HANDLE), (HANDLE)sync_handle};
-    DWORD count = sync_handle ? 2 : 1;
+    HANDLE handles[3] = {GetStdHandle(STD_INPUT_HANDLE), wake_event, (HANDLE)sync_handle};
+    DWORD count = sync_handle ? 3 : 2;
     DWORD ms = timeout_ms < 0 ? INFINITE : (DWORD)timeout_ms;
     DWORD r = WaitForMultipleObjects(count, handles, FALSE, ms);
 
     if (r == WAIT_OBJECT_0)
         return PLAT_INPUT;
     if (r == WAIT_OBJECT_0 + 1)
+        return PLAT_HUP;
+    if (r == WAIT_OBJECT_0 + 2)
         return PLAT_SYNC;
     return r == WAIT_FAILED ? PLAT_HUP : 0;
 }
 
+static void append_slashes(String_Builder *cmd, size_t n)
+{
+    while (n--)
+        sb_putc(cmd, '\\');
+}
+
 static void quote_arg(String_Builder *cmd, const char *arg)
 {
-    int plain = *arg && !strpbrk(arg, " \t\"");
+    int plain = *arg && !strpbrk(arg, " \t\n\v\"");
 
     if (cmd->count)
         sb_putc(cmd, ' ');
@@ -69,9 +92,18 @@ static void quote_arg(String_Builder *cmd, const char *arg)
         return;
     }
     sb_putc(cmd, '"');
-    for (; *arg; arg++) {
-        if (*arg == '"')
-            sb_putc(cmd, '\\');
+    for (;; arg++) {
+        size_t slashes = 0;
+
+        while (*arg == '\\') {
+            arg++;
+            slashes++;
+        }
+        if (!*arg) {
+            append_slashes(cmd, slashes * 2);
+            break;
+        }
+        append_slashes(cmd, *arg == '"' ? slashes * 2 + 1 : slashes);
         sb_putc(cmd, *arg);
     }
     sb_putc(cmd, '"');
@@ -85,85 +117,163 @@ static HANDLE open_inheritable(const char *path, DWORD access, DWORD disposition
                        disposition, FILE_ATTRIBUTE_NORMAL, NULL);
 }
 
-static void slurp(const char *path, String_Builder *sb, size_t limit)
-{
-    char chunk[512];
-    size_t n;
-    FILE *f = fopen(path, "rb");
+typedef struct {
+    HANDLE pipe;
+    String_Builder *sb;
+    size_t limit;
+} Drain;
 
-    if (!f)
-        return;
-    while (sb && sb->count < limit && (n = fread(chunk, 1, sizeof chunk, f)) > 0)
-        sb_append(sb, chunk, n < limit - sb->count ? n : limit - sb->count);
-    fclose(f);
+static DWORD WINAPI drain_main(LPVOID arg)
+{
+    Drain *d = arg;
+    char chunk[4096];
+    DWORD n;
+
+    while (ReadFile(d->pipe, chunk, sizeof chunk, &n, NULL) && n) {
+        size_t room = d->sb && d->sb->count < d->limit ? d->limit - d->sb->count : 0;
+
+        if (room)
+            sb_append(d->sb, chunk, n < room ? n : room);
+    }
+    return 0;
 }
 
-static int wait_process(PROCESS_INFORMATION *pi, int timeout_ms)
+typedef struct {
+    HANDLE pipe;
+    const char *data;
+    size_t len;
+} Feed;
+
+static DWORD WINAPI feed_main(LPVOID arg)
+{
+    Feed *f = arg;
+    size_t done = 0;
+    DWORD n;
+
+    while (done < f->len && WriteFile(f->pipe, f->data + done, (DWORD)(f->len - done), &n, NULL) && n)
+        done += n;
+    CloseHandle(f->pipe);
+    return 0;
+}
+
+static int make_pipe(HANDLE *parent, HANDLE *child, int parent_reads)
+{
+    SECURITY_ATTRIBUTES sa = {sizeof sa, NULL, TRUE};
+    HANDLE read_end, write_end;
+
+    if (!CreatePipe(&read_end, &write_end, &sa, 0))
+        return -1;
+    *parent = parent_reads ? read_end : write_end;
+    *child = parent_reads ? write_end : read_end;
+    SetHandleInformation(*parent, HANDLE_FLAG_INHERIT, 0);
+    return 0;
+}
+
+static int wait_process(PROCESS_INFORMATION *pi, HANDLE job, int timeout_ms)
 {
     DWORD code = 0;
+    int rc;
 
     if (WaitForSingleObject(pi->hProcess, timeout_ms < 0 ? INFINITE : (DWORD)timeout_ms) == WAIT_TIMEOUT) {
-        TerminateProcess(pi->hProcess, 1);
-        WaitForSingleObject(pi->hProcess, 1000);
-        CloseHandle(pi->hProcess);
-        CloseHandle(pi->hThread);
-        return -2;
+        if (job)
+            TerminateJobObject(job, 1);
+        else
+            TerminateProcess(pi->hProcess, 1);
+        WaitForSingleObject(pi->hProcess, 2000);
+        rc = -2;
+    } else {
+        GetExitCodeProcess(pi->hProcess, &code);
+        rc = (int)code;
     }
-    GetExitCodeProcess(pi->hProcess, &code);
     CloseHandle(pi->hProcess);
     CloseHandle(pi->hThread);
-    return (int)code;
+    return rc;
+}
+
+static HANDLE new_job(void)
+{
+    return CreateJobObjectA(NULL, NULL);
+}
+
+static int start_process(String_Builder *cmd, const char *dir, STARTUPINFOA *si, PROCESS_INFORMATION *pi, HANDLE job)
+{
+    if (!CreateProcessA(NULL, cmd->data, NULL, NULL, TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED, NULL, dir, si, pi))
+        return -1;
+    if (job)
+        AssignProcessToJobObject(job, pi->hProcess);
+    ResumeThread(pi->hThread);
+    return 0;
 }
 
 int plat_run(char *const argv[], const char *dir, const String_Builder *input, String_Builder *out,
              String_Builder *err, size_t limit, int timeout_ms)
 {
-    static volatile LONG serial;
-    char base[MAX_PATH + 64], in_path[MAX_PATH + 80], out_path[MAX_PATH + 80], err_path[MAX_PATH + 80];
     String_Builder cmd = {0};
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
-    int rc = -1;
+    HANDLE in_parent = NULL, in_child = NULL, out_parent = NULL, out_child = NULL, err_parent = NULL, err_child = NULL;
+    HANDLE threads[3] = {0}, job = new_job();
+    Drain drains[2] = {{0, out, limit}, {0, err, limit}};
+    Feed feed = {0};
+    int rc = -1, count = 0;
 
-    GetTempPathA(MAX_PATH, base);
-    snprintf(base + strlen(base), 64, "hopes-%lu-%ld", GetCurrentProcessId(), InterlockedIncrement(&serial));
-    snprintf(in_path, sizeof in_path, "%s.in", base);
-    snprintf(out_path, sizeof out_path, "%s.out", base);
-    snprintf(err_path, sizeof err_path, "%s.err", base);
-
-    if (input) {
-        FILE *f = fopen(in_path, "wb");
-
-        if (f) {
-            fwrite(sb_cstr(input), 1, input->count, f);
-            fclose(f);
-        }
-    }
+    if (make_pipe(&out_parent, &out_child, 1) || make_pipe(&err_parent, &err_child, 1))
+        goto done;
+    if (input && make_pipe(&in_parent, &in_child, 0))
+        goto done;
     memset(&si, 0, sizeof si);
     si.cb = sizeof si;
     si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdInput = open_inheritable(input ? in_path : "NUL", GENERIC_READ, OPEN_EXISTING);
-    si.hStdOutput = open_inheritable(out_path, GENERIC_WRITE, CREATE_ALWAYS);
-    si.hStdError = open_inheritable(err_path, GENERIC_WRITE, CREATE_ALWAYS);
+    si.hStdInput = input ? in_child : open_inheritable("NUL", GENERIC_READ, OPEN_EXISTING);
+    si.hStdOutput = out_child;
+    si.hStdError = err_child;
     for (int i = 0; argv[i]; i++)
         quote_arg(&cmd, argv[i]);
 
-    if (CreateProcessA(NULL, cmd.data, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, dir, &si, &pi))
-        rc = wait_process(&pi, timeout_ms);
-    CloseHandle(si.hStdInput);
-    CloseHandle(si.hStdOutput);
-    CloseHandle(si.hStdError);
-
-    slurp(out_path, out, limit);
-    slurp(err_path, err, limit);
-    remove(in_path);
-    remove(out_path);
-    remove(err_path);
+    if (!start_process(&cmd, dir, &si, &pi, job)) {
+        drains[0].pipe = out_parent;
+        drains[1].pipe = err_parent;
+        threads[count++] = CreateThread(NULL, 0, drain_main, &drains[0], 0, NULL);
+        threads[count++] = CreateThread(NULL, 0, drain_main, &drains[1], 0, NULL);
+        if (input) {
+            feed = (Feed){in_parent, sb_cstr(input), input->count};
+            threads[count++] = CreateThread(NULL, 0, feed_main, &feed, 0, NULL);
+            in_parent = NULL;
+        }
+        CloseHandle(si.hStdOutput);
+        CloseHandle(si.hStdError);
+        out_child = err_child = NULL;
+        rc = wait_process(&pi, job, timeout_ms);
+        WaitForMultipleObjects((DWORD)count, threads, TRUE, 5000);
+    }
+    if (!input && si.hStdInput)
+        CloseHandle(si.hStdInput);
+done:
+    for (int i = 0; i < count; i++)
+        CloseHandle(threads[i]);
+    for (HANDLE *h = (HANDLE[]){in_parent, in_child, out_parent, out_child, err_parent, err_child}; 0;)
+        (void)h;
+    if (in_parent)
+        CloseHandle(in_parent);
+    if (in_child)
+        CloseHandle(in_child);
+    if (out_parent)
+        CloseHandle(out_parent);
+    if (out_child)
+        CloseHandle(out_child);
+    if (err_parent)
+        CloseHandle(err_parent);
+    if (err_child)
+        CloseHandle(err_child);
+    if (job)
+        CloseHandle(job);
     sb_free(&cmd);
     return rc;
 }
 
 #else
+
+#define PIPE_STEP 4096
 
 void plat_init(void)
 {
@@ -288,7 +398,7 @@ static void run_child(char *const argv[], const char *dir, const int in[2], cons
 
 static int service(struct pollfd *p, String_Builder *sb, size_t limit)
 {
-    char chunk[512];
+    char chunk[4096];
     ssize_t n;
 
     if (p->fd < 0 || !p->revents)
@@ -305,43 +415,51 @@ static int service(struct pollfd *p, String_Builder *sb, size_t limit)
     return 0;
 }
 
-static int pump_outputs(pid_t pid, int out_fd, int err_fd, String_Builder *out, String_Builder *err,
-                         size_t limit, int timeout_ms)
+static void feed_child(struct pollfd *p, const String_Builder *input, size_t *sent)
 {
-    struct pollfd fds[2] = {{out_fd, POLLIN, 0}, {err_fd, POLLIN, 0}};
-    int64_t deadline = now_ms() + timeout_ms;
-    int open_fds = 2;
+    size_t left = input->count - *sent, step = left < PIPE_STEP ? left : PIPE_STEP;
+    ssize_t w = 0;
 
-    while (open_fds) {
+    if (p->fd < 0 || !p->revents)
+        return;
+    if (step)
+        w = write(p->fd, sb_cstr(input) + *sent, step);
+    if (w < 0 && errno == EINTR)
+        return;
+    if (w > 0)
+        *sent += (size_t)w;
+    if (w < 0 || !step || *sent == input->count) {
+        close(p->fd);
+        p->fd = -1;
+    }
+}
+
+static int pump(pid_t pid, int in_fd, const String_Builder *input, int out_fd, int err_fd, String_Builder *out,
+                String_Builder *err, size_t limit, int timeout_ms)
+{
+    struct pollfd fds[3] = {{out_fd, POLLIN, 0}, {err_fd, POLLIN, 0}, {in_fd, POLLOUT, 0}};
+    int64_t deadline = now_ms() + timeout_ms;
+    size_t sent = 0;
+    int timed_out = 0;
+
+    while (fds[0].fd >= 0 || fds[1].fd >= 0) {
         int64_t left = deadline - now_ms();
 
         if (timeout_ms >= 0 && left <= 0) {
             kill(pid, SIGKILL);
-            return 1;
+            timed_out = 1;
+            break;
         }
-        if (poll(fds, 2, timeout_ms < 0 ? -1 : (int)left) < 0 && errno != EINTR)
+        if (poll(fds, 3, timeout_ms < 0 ? -1 : (int)left) < 0 && errno != EINTR)
             break;
-        open_fds -= service(&fds[0], out, limit) + service(&fds[1], err, limit);
+        service(&fds[0], out, limit);
+        service(&fds[1], err, limit);
+        if (input)
+            feed_child(&fds[2], input, &sent);
     }
-    return 0;
-}
-
-static void feed_stdin(int fd, const String_Builder *input)
-{
-    const char *p = sb_cstr(input);
-    size_t left = input->count;
-
-    while (left) {
-        ssize_t w = write(fd, p, left);
-
-        if (w < 0 && errno == EINTR)
-            continue;
-        if (w <= 0)
-            break;
-        p += w;
-        left -= (size_t)w;
-    }
-    close(fd);
+    if (fds[2].fd >= 0)
+        close(fds[2].fd);
+    return timed_out;
 }
 
 int plat_run(char *const argv[], const char *dir, const String_Builder *input, String_Builder *out,
@@ -361,11 +479,9 @@ int plat_run(char *const argv[], const char *dir, const String_Builder *input, S
 
     close(po[1]);
     close(pe[1]);
-    if (input) {
+    if (input)
         close(in[0]);
-        feed_stdin(in[1], input);
-    }
-    timed_out = pump_outputs(pid, po[0], pe[0], out, err, limit, timeout_ms);
+    timed_out = pump(pid, input ? in[1] : -1, input, po[0], pe[0], out, err, limit, timeout_ms);
     close(po[0]);
     close(pe[0]);
     while (waitpid(pid, &status, 0) < 0 && errno == EINTR)

@@ -5,7 +5,11 @@
 #endif
 #ifdef _WIN32
 #undef MOUSE_MOVED
+#if __has_include(<pdcurses.h>)
+#include <pdcurses.h>
+#else
 #include <curses.h>
+#endif
 #else
 #include <ncurses.h>
 #endif

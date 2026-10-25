@@ -2,9 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main, master, c-port]
+    branches: [main, master, c-lean]
   pull_request:
-    branches: [main, master, c-port]
+    branches: [main, master, c-lean]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -85,3 +86,6 @@ jobs:
 
       - name: Smoke test
         run: ./build/hopes.exe --version
+
+      - name: Unit tests
+        run: make test

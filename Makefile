@@ -11,9 +11,15 @@ CFLAGS  += -std=gnu11 -Wall -Wextra -Wno-unused-function -Isrc \
 
 ifneq (,$(findstring MINGW,$(UNAME))$(findstring MSYS,$(UNAME)))
 BIN      = $(BUILD)/hopes.exe
-CFLAGS  += -DPDC_WIDE
+EXE      = .exe
+SANITIZE =
+TEST_LDFLAGS = -static
+TEST_LIBS = -lpdcurses_wincon -lwinmm
+WINDRES ?= windres
+WIN_RES  = $(BUILD)/hopes.res.o
+CFLAGS  += -DPDC_WIDE -DPDC_FORCE_UTF8
 LDFLAGS += -static -Wl,--gc-sections
-LIBS     = -lpdcurses
+LIBS     = -lpdcurses_wincon -lwinmm
 else ifeq ($(UNAME),Darwin)
 LDFLAGS += -flto -Wl,-dead_strip -Wl,-x -Wl,-no_fixup_chains -Wl,-no_data_const
 LIBS     = -lncurses
@@ -22,6 +28,12 @@ LDFLAGS += -no-pie -Wl,--gc-sections -Wl,--as-needed -Wl,-z,norelro -Wl,-z,nosep
 LIBS     = $(shell pkg-config --libs ncursesw 2>/dev/null || echo -lncursesw)
 CFLAGS  += $(shell pkg-config --cflags ncursesw 2>/dev/null)
 endif
+
+EXE      ?=
+SANITIZE ?= -fsanitize=address,undefined
+TEST_LDFLAGS ?=
+TEST_LIBS ?=
+WIN_RES ?=
 
 ifdef SQLITE
 CFLAGS += -DHOPES_SQLITE
@@ -39,18 +51,21 @@ endif
 
 all: $(BIN)
 
-$(BIN): src/main.c $(HEADERS) | $(BUILD)
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ src/main.c $(LIBS)
+$(BIN): src/main.c $(HEADERS) $(WIN_RES) | $(BUILD)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ src/main.c $(WIN_RES) $(LIBS)
 	strip $(if $(filter Darwin,$(UNAME)),-x,-s) $@
 
 $(BUILD):
 	mkdir -p $@
 
-test: $(BUILD)/tests
-	$(BUILD)/tests
+$(BUILD)/hopes.res.o: src/hopes.rc src/hopes.manifest | $(BUILD)
+	$(WINDRES) -I src -O coff -o $@ src/hopes.rc
 
-$(BUILD)/tests: tests/tests.c $(HEADERS) | $(BUILD)
-	$(CC) $(CFLAGS) -O0 -g -fsanitize=address,undefined -DHOPES_NO_UI -o $@ tests/tests.c $(if $(SQLITE),-lsqlite3)
+test: $(BUILD)/tests$(EXE)
+	$(BUILD)/tests$(EXE)
+
+$(BUILD)/tests$(EXE): tests/tests.c $(HEADERS) $(WIN_RES) | $(BUILD)
+	$(CC) $(CFLAGS) -O0 -g $(SANITIZE) -DHOPES_NO_UI -o $@ tests/tests.c $(WIN_RES) $(TEST_LDFLAGS) $(TEST_LIBS) $(if $(SQLITE),-lsqlite3)
 
 compile_commands.json: Makefile
 	@printf '[\n  {"directory": "%s", "file": "src/main.c", "arguments": ["%s", "-std=gnu11", "-Isrc", "-c", "src/main.c"]},\n  {"directory": "%s", "file": "tests/tests.c", "arguments": ["%s", "-std=gnu11", "-Isrc", "-DHOPES_NO_UI", "-c", "tests/tests.c"]}\n]\n' \

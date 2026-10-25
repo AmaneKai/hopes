@@ -3,6 +3,7 @@
 #define NET_TIMEOUT_MS 10000
 #define OFFLINE_RETRY_MS 30000
 #define EVENT_LINE_MAX 320
+#define ABORT_WAIT_MS 3000
 
 int sync_enabled;
 
@@ -90,7 +91,7 @@ static Git_Rc classify(Git_Out *o, char *msg, size_t cap)
         return G_REJECTED;
     while (n && (o->err[n - 1] == '\n' || o->err[n - 1] == '\r' || o->err[n - 1] == ' '))
         o->err[--n] = 0;
-    snprintf(msg, cap, "%s", o->err[0] ? o->err : "git failed");
+    snprintf(msg, cap, "%.255s", o->err[0] ? o->err : "git failed");
     return G_FAIL;
 }
 
@@ -231,7 +232,7 @@ static void head_of(char *out, size_t cap)
     Git_Out o;
 
     git(&o, "rev-parse", "HEAD", NULL);
-    snprintf(out, cap, "%s", o.out);
+    snprintf(out, cap, "%.63s", o.out);
 }
 
 static int rebase_and_push(void)
@@ -358,7 +359,7 @@ static void worker_reap(void)
 
 static void worker_abort(void)
 {
-    TerminateThread(worker_thread, 1);
+    WaitForSingleObject(worker_thread, ABORT_WAIT_MS);
     CloseHandle(worker_thread);
     worker_thread = NULL;
 }

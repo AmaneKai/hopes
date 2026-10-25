@@ -1,5 +1,136 @@
 #define HOPES_IMPLEMENTATION
 #include "hopes.h"
+#include <dirent.h>
+#include <locale.h>
+
+#ifdef _WIN32
+#include <fcntl.h>
+#define getpid() ((int)GetCurrentProcessId())
+#endif
+
+static char self_exe[512];
+
+static void put_env(const char *key, const char *value)
+{
+#ifdef _WIN32
+    _putenv_s(key, value ? value : "");
+#else
+    if (value)
+        setenv(key, value, 1);
+    else
+        unsetenv(key);
+#endif
+}
+
+static void temp_path(char *out, size_t cap, const char *name)
+{
+#ifdef _WIN32
+    const char *base = getenv("TEMP");
+#else
+    const char *base = getenv("TMPDIR");
+#endif
+    snprintf(out, cap, "%s/hopes-%s-%d", base && *base ? base : "/tmp", name, (int)getpid());
+}
+
+static void remove_tree(const char *path)
+{
+    struct stat st;
+    struct dirent *entry;
+    DIR *dir;
+
+    if (stat(path, &st))
+        return;
+    if (!S_ISDIR(st.st_mode)) {
+        remove(path);
+        return;
+    }
+    dir = opendir(path);
+    while (dir && (entry = readdir(dir))) {
+        char child[1024];
+
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
+            continue;
+        snprintf(child, sizeof child, "%s/%s", path, entry->d_name);
+        remove_tree(child);
+    }
+    if (dir)
+        closedir(dir);
+    rmdir(path);
+}
+
+static void resolve_self(const char *argv0)
+{
+#ifdef _WIN32
+    GetModuleFileNameA(NULL, self_exe, sizeof self_exe);
+    (void)argv0;
+#else
+    if (!realpath(argv0, self_exe))
+        snprintf(self_exe, sizeof self_exe, "%s", argv0);
+#endif
+}
+
+static void sleep_ms(int ms)
+{
+#ifdef _WIN32
+    Sleep((DWORD)ms);
+#else
+    usleep((useconds_t)ms * 1000);
+#endif
+}
+
+static int is_helper(const char *flag)
+{
+    static const char *const names[] = {"--storage", "--fail", "--args", "--cat", "--sleep"};
+
+    for (size_t i = 0; i < sizeof names / sizeof *names; i++)
+        if (!strcmp(flag, names[i]))
+            return 1;
+    return 0;
+}
+
+static int storage_helper(int argc, char **argv)
+{
+    char chunk[4096];
+    size_t n;
+    FILE *f;
+
+#ifdef _WIN32
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
+    if (argc >= 2 && !strcmp(argv[1], "--fail")) {
+        fputs("boom from helper\n", stderr);
+        return 3;
+    }
+    if (argc >= 2 && !strcmp(argv[1], "--args")) {
+        for (int i = 2; i < argc; i++)
+            printf("[%s]\n", argv[i]);
+        return 0;
+    }
+    if (argc >= 2 && !strcmp(argv[1], "--cat")) {
+        while ((n = fread(chunk, 1, sizeof chunk, stdin)) > 0)
+            fwrite(chunk, 1, n, stdout);
+        return 0;
+    }
+    if (argc >= 3 && !strcmp(argv[1], "--sleep")) {
+        sleep_ms(atoi(argv[2]));
+        return 0;
+    }
+    if (argc < 4)
+        return 2;
+    if (!strcmp(argv[3], "load")) {
+        f = fopen(argv[2], "rb");
+        while (f && (n = fread(chunk, 1, sizeof chunk, f)) > 0)
+            fwrite(chunk, 1, n, stdout);
+        if (f)
+            fclose(f);
+        return 0;
+    }
+    f = fopen(argv[2], "wb");
+    while (f && (n = fread(chunk, 1, sizeof chunk, stdin)) > 0)
+        fwrite(chunk, 1, n, f);
+    return f && !fclose(f) ? 0 : 1;
+}
 
 static int checks, failures;
 
@@ -254,7 +385,7 @@ static void open_app(void)
     Config cfg;
     Item *items = NULL;
 
-    snprintf(test_dir, sizeof test_dir, "/tmp/hopes-test-%d", (int)getpid());
+    temp_path(test_dir, sizeof test_dir, "test");
     memset(&cfg, 0, sizeof cfg);
     cfg.dir = xstrdup(test_dir);
     CHECK(store_open(&cfg) == 0);
@@ -270,11 +401,8 @@ static void open_app(void)
 
 static void close_app(void)
 {
-    char cmd[300];
-
     app_free();
-    snprintf(cmd, sizeof cmd, "rm -rf %s", test_dir);
-    CHECK(system(cmd) == 0);
+    remove_tree(test_dir);
 }
 
 static Item *saved(void)
@@ -491,53 +619,48 @@ static void test_corrupt_file_is_preserved(void)
 
 static void make_dir(const char *path)
 {
-    char cmd[400];
-
-    snprintf(cmd, sizeof cmd, "rm -rf %s && mkdir -p %s", path, path);
-    CHECK(system(cmd) == 0);
+    remove_tree(path);
+    mkdirs(path);
 }
 
 static void test_exec_backend(void)
 {
-    char root[128], script[200];
+    char root[128], data[200];
     Config cfg;
     Item *items = NULL, *loaded = NULL;
-    FILE *f;
 
-    snprintf(root, sizeof root, "/tmp/hopes-exec-%d", (int)getpid());
+    temp_path(root, sizeof root, "exec dir");
     make_dir(root);
-    snprintf(script, sizeof script, "%s/store.sh", root);
-    f = fopen(script, "w");
-    fputs("#!/bin/sh\nf=\"$(dirname \"$0\")/data.json\"\ncase \"$1\" in\n"
-          "load) cat \"$f\" 2>/dev/null || true ;;\nsave) cat > \"$f\" ;;\nesac\n",
-          f);
-    fclose(f);
-    chmod(script, 0755);
+    snprintf(data, sizeof data, "%s/data.json", root);
 
     memset(&cfg, 0, sizeof cfg);
     cfg.backend = BE_EXEC;
     cfg.dir = xstrdup(root);
-    arr_push(cfg.command, xstrdup(script));
+    arr_push(cfg.command, xstrdup(self_exe));
+    arr_push(cfg.command, xstrdup("--storage"));
+    arr_push(cfg.command, xstrdup(data));
     CHECK(store_open(&cfg) == 0);
     CHECK(store_load(&loaded) == 0 && len_of(loaded) == 0);
-    arr_push(items, make_item("through a script", P_HIGH, ST_WIP, "exec"));
+    arr_push(items, make_item("through a helper \"quoted\" 雨音", P_HIGH, ST_WIP, "exec"));
     CHECK(store_save(items) == 0);
     CHECK(store_load(&loaded) == 0 && len_of(loaded) == 1);
-    CHECK_STR(loaded[0].title, "through a script");
+    CHECK_STR(loaded[0].title, "through a helper \"quoted\" 雨音");
     CHECK(loaded[0].prio == P_HIGH && loaded[0].status == ST_WIP);
 
     tags_free(cfg.command);
     cfg.command = NULL;
-    arr_push(cfg.command, xstrdup("/usr/bin/false"));
+    arr_push(cfg.command, xstrdup(self_exe));
+    arr_push(cfg.command, xstrdup("--fail"));
     CHECK(store_open(&cfg) == 0);
     CHECK(store_save(items) != 0);
     CHECK(strstr(store_error(), "failed") != NULL);
+    CHECK(strstr(store_error(), "boom from helper") != NULL);
 
     items_free(items);
     items_free(loaded);
     tags_free(cfg.command);
     free(cfg.dir);
-    make_dir(root);
+    remove_tree(root);
 }
 
 #ifdef HOPES_SQLITE
@@ -547,7 +670,7 @@ static void test_sqlite_backend(void)
     Config cfg;
     Item *items = NULL, *loaded = NULL;
 
-    snprintf(root, sizeof root, "/tmp/hopes-sqlite-%d", (int)getpid());
+    temp_path(root, sizeof root, "sqlite");
     make_dir(root);
     memset(&cfg, 0, sizeof cfg);
     cfg.backend = BE_SQLITE;
@@ -563,7 +686,7 @@ static void test_sqlite_backend(void)
     items_free(items);
     items_free(loaded);
     free(cfg.dir);
-    make_dir(root);
+    remove_tree(root);
 }
 #endif
 
@@ -1100,13 +1223,16 @@ static void test_view_state_round_trip(void)
 
 static void test_view_state_on_disk(void)
 {
-    char home[128], cmd[200];
+    char home[160];
 
-    snprintf(home, sizeof home, "/tmp/hopes-home-%d", (int)getpid());
-    snprintf(cmd, sizeof cmd, "rm -rf %s && mkdir -p %s", home, home);
-    CHECK(system(cmd) == 0);
-    setenv("HOME", home, 1);
-    unsetenv("XDG_STATE_HOME");
+    temp_path(home, sizeof home, "home");
+    make_dir(home);
+#ifdef _WIN32
+    put_env("LOCALAPPDATA", home);
+#else
+    put_env("HOME", home);
+    put_env("XDG_STATE_HOME", NULL);
+#endif
 
     open_app();
     view_load();
@@ -1119,8 +1245,7 @@ static void test_view_state_on_disk(void)
     view_load();
     CHECK(A.view == V_KANBAN && A.sort == SORT_PRIORITY);
     close_app();
-    snprintf(cmd, sizeof cmd, "rm -rf %s", home);
-    CHECK(system(cmd) == 0);
+    remove_tree(home);
 }
 
 #ifdef HOPES_SQLITE
@@ -1131,7 +1256,7 @@ static void test_sqlite_failed_save_keeps_data(void)
     Item *items = NULL, *loaded = NULL;
     sqlite3 *other = NULL;
 
-    snprintf(root, sizeof root, "/tmp/hopes-sqlite-fail-%d", (int)getpid());
+    temp_path(root, sizeof root, "sqlite-fail");
     make_dir(root);
     memset(&cfg, 0, sizeof cfg);
     cfg.backend = BE_SQLITE;
@@ -1157,12 +1282,179 @@ static void test_sqlite_failed_save_keeps_data(void)
     items_free(items);
     items_free(loaded);
     free(cfg.dir);
-    make_dir(root);
+    remove_tree(root);
 }
 #endif
 
-int main(void)
+static void feed(String_Builder *b, const unsigned char *bytes, size_t n)
 {
+    sb_clear(b);
+    sb_append(b, (const char *)bytes, n);
+    text_normalize(b);
+}
+
+static void test_text_normalize(void)
+{
+    static const unsigned char bom8[] = {0xEF, 0xBB, 0xBF, '[', ']'};
+    static const unsigned char le[] = {0xFF, 0xFE, '[', 0, '"', 0, 0x3D, 0xD8, 0x00, 0xDE, '"', 0, ']', 0};
+    static const unsigned char be[] = {0xFE, 0xFF, 0, '[', 0, ']'};
+    static const unsigned char lone[] = {0xFF, 0xFE, 0x00, 0xD8, 'x', 0};
+    static const unsigned char odd[] = {0xFF, 0xFE, 'a', 0, 'b'};
+    static const unsigned char plain[] = {'[', ']'};
+    String_Builder b = {0};
+    Item *v = NULL;
+
+    feed(&b, bom8, sizeof bom8);
+    CHECK_STR(b.data, "[]");
+    feed(&b, be, sizeof be);
+    CHECK_STR(b.data, "[]");
+    feed(&b, le, sizeof le);
+    CHECK_STR(b.data, "[\"\xF0\x9F\x98\x80\"]");
+    feed(&b, lone, sizeof lone);
+    CHECK_STR(b.data, "\xEF\xBF\xBDx");
+    feed(&b, odd, sizeof odd);
+    CHECK_STR(b.data, "a");
+    feed(&b, plain, sizeof plain);
+    CHECK_STR(b.data, "[]");
+    feed(&b, le, 2);
+    CHECK(b.count == 0);
+    feed(&b, bom8, 3);
+    CHECK(b.count == 0);
+    sb_free(&b);
+    text_normalize(&b);
+    CHECK(b.count == 0);
+
+    sb_set(&b, "\xEF\xBB\xBF[{\"title\":\"t\",\"priority\":\"Low\",\"status\":\"Todo\"}]");
+    text_normalize(&b);
+    CHECK(json_load(b.data, b.count, &v) == 0 && len_of(v) == 1);
+    items_free(v);
+    sb_free(&b);
+}
+
+static void write_bytes(const char *path, const unsigned char *bytes, size_t n)
+{
+    FILE *f = fopen(path, "wb");
+
+    CHECK(f != NULL);
+    if (f) {
+        fwrite(bytes, 1, n, f);
+        fclose(f);
+    }
+}
+
+static void test_files_from_other_editors(void)
+{
+    static const unsigned char json16[] = {0xFF, 0xFE, '[', 0, ']', 0, '\r', 0, '\n', 0};
+    static const unsigned char toml8[] = {0xEF, 0xBB, 0xBF, '[', 's', 'y', 'n', 'c', ']', '\r', '\n',
+                                          'e', 'n', 'a', 'b', 'l', 'e', 'd', ' ', '=', ' ', 'f', 'a', 'l', 's', 'e', '\r', '\n'};
+    char root[160], path[200];
+    Config cfg;
+    Item *v = NULL;
+
+    temp_path(root, sizeof root, "editors");
+    make_dir(root);
+    snprintf(path, sizeof path, "%s/items.json", root);
+    write_bytes(path, json16, sizeof json16);
+    memset(&cfg, 0, sizeof cfg);
+    cfg.dir = xstrdup(root);
+    CHECK(store_open(&cfg) == 0);
+    CHECK(store_load(&v) == 0 && len_of(v) == 0);
+    CHECK(access(path, F_OK) == 0);
+    items_free(v);
+    free(cfg.dir);
+
+    snprintf(path, sizeof path, "%s/config.toml", root);
+    write_bytes(path, toml8, sizeof toml8);
+    put_env("HOPES_CONFIG", path);
+    config_load(&cfg);
+    CHECK(cfg.sync_enabled == 0);
+    put_env("HOPES_CONFIG", NULL);
+    remove_tree(root);
+}
+
+static void test_nested_directories(void)
+{
+#ifdef _WIN32
+    const char *sep = "\\";
+#else
+    const char *sep = "/";
+#endif
+    char root[160], deep[400];
+    struct stat st;
+
+    temp_path(root, sizeof root, "nested");
+    make_dir(root);
+    snprintf(deep, sizeof deep, "%s%sone%stwo%sthree", root, sep, sep, sep);
+    mkdirs(deep);
+    CHECK(stat(deep, &st) == 0 && S_ISDIR(st.st_mode));
+    mkdirs(deep);
+    CHECK(stat(deep, &st) == 0);
+    remove_tree(root);
+}
+
+static void test_run_arguments(void)
+{
+    char *argv[] = {self_exe, "--args", "plain", "with space", "quote\"inside", "trailing\\", "two\\\\",
+                    "say \"hi\" there\\", "", "雨音 カイ", NULL};
+    String_Builder out = {0}, err = {0};
+
+    CHECK(plat_run(argv, NULL, NULL, &out, &err, 1 << 16, 10000) == 0);
+    CHECK_STR(sb_cstr(&out), "[plain]\n[with space]\n[quote\"inside]\n[trailing\\]\n[two\\\\]\n"
+                             "[say \"hi\" there\\]\n[]\n[雨音 カイ]\n");
+    sb_free(&out);
+    sb_free(&err);
+}
+
+static void test_run_pipes(void)
+{
+    char *argv[] = {self_exe, "--cat", NULL};
+    String_Builder in = {0}, out = {0}, err = {0};
+    int64_t started;
+
+    for (int i = 0; i < 300000; i++)
+        sb_append(&in, "0123456789abcdef", 10);
+    CHECK(plat_run(argv, NULL, &in, &out, &err, 1 << 24, 20000) == 0);
+    CHECK(out.count == in.count && !memcmp(out.data, in.data, in.count));
+
+    sb_clear(&out);
+    CHECK(plat_run(argv, NULL, &in, &out, &err, 1000, 20000) == 0);
+    CHECK(out.count == 1000);
+
+    started = now_ms();
+    sb_clear(&out);
+    CHECK(plat_run((char *[]){self_exe, "--sleep", "30000", NULL}, NULL, NULL, &out, &err, 1000, 400) == -2);
+    CHECK(now_ms() - started < 10000);
+
+    sb_clear(&err);
+    CHECK(plat_run((char *[]){self_exe, "--fail", NULL}, NULL, NULL, &out, &err, 1000, 10000) == 3);
+    CHECK(strstr(sb_cstr(&err), "boom from helper") != NULL);
+
+    CHECK(plat_run((char *[]){"hopes-no-such-program-xyz", NULL}, NULL, NULL, &out, &err, 1000, 10000) != 0);
+    sb_free(&in);
+    sb_free(&out);
+    sb_free(&err);
+}
+
+static void test_character_widths(void)
+{
+#ifndef _WIN32
+    if (!setlocale(LC_CTYPE, "en_US.UTF-8") && !setlocale(LC_CTYPE, "C.UTF-8"))
+        return;
+#endif
+    CHECK(u8_cp_width('a') == 1);
+    CHECK(u8_cp_width(0x96E8) == 2);
+    CHECK(u8_cp_width(0x30AB) == 2);
+    CHECK(u8_cp_width(0x1F600) == 2);
+    CHECK(u8_cp_width(0x0301) == 0);
+    CHECK(u8_width("雨音", 6) == 4);
+    CHECK(u8_width("e\xCC\x81x", 4) == 2);
+}
+
+int main(int argc, char **argv)
+{
+    if (argc >= 2 && is_helper(argv[1]))
+        return storage_helper(argc, argv);
+    resolve_self(argv[0]);
     test_motions();
     test_edits();
     test_empty_buffer();
@@ -1197,6 +1489,12 @@ int main(void)
     test_view_state_on_disk();
     test_corrupt_file_is_preserved();
     test_exec_backend();
+    test_text_normalize();
+    test_files_from_other_editors();
+    test_nested_directories();
+    test_run_arguments();
+    test_run_pipes();
+    test_character_widths();
 #ifdef HOPES_SQLITE
     test_sqlite_backend();
     test_sqlite_failed_save_keeps_data();

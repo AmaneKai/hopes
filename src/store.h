@@ -26,16 +26,27 @@ static int fail(const char *what)
     return -1;
 }
 
-static void mkdirs(const char *p)
+static int is_separator(char c)
+{
+#ifdef _WIN32
+    return c == '/' || c == '\\';
+#else
+    return c == '/';
+#endif
+}
+
+void mkdirs(const char *p)
 {
     char *s = xstrdup(p);
 
     for (char *q = s + 1; *q; q++) {
-        if (*q != '/')
+        char saved = *q;
+
+        if (!is_separator(saved))
             continue;
         *q = 0;
         plat_mkdir(s);
-        *q = '/';
+        *q = saved;
     }
     plat_mkdir(s);
     free(s);
@@ -158,7 +169,7 @@ static int run_exec(const char *verb, const String_Builder *in, String_Builder *
 static int load_exec(Item **v)
 {
     String_Builder b = {0};
-    int rc = run_exec("load", NULL, &b) ? -1 : parse_items(&b, v);
+    int rc = run_exec("load", NULL, &b) ? -1 : (text_normalize(&b), parse_items(&b, v));
 
     sb_free(&b);
     return rc;
@@ -260,6 +271,7 @@ static int load_json(Item **v)
         sb_reserve(&b, (size_t)st.st_size);
     rc = read_all(fd, &b);
     close(fd);
+    text_normalize(&b);
     if (rc) {
         sb_free(&b);
         return fail(path);

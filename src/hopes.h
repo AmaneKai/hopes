@@ -59,6 +59,8 @@ char *xstrdup(const char *s);
 char *xstrndup(const char *s, size_t n);
 int64_t now_ms(void);
 void heap_trim(void);
+void text_normalize(String_Builder *b);
+void mkdirs(const char *path);
 
 #define PLAT_INPUT 1
 #define PLAT_SYNC 2

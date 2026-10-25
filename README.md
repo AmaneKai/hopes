@@ -20,7 +20,7 @@ Needs a C11 compiler and a curses library:
 | --- | --- | --- |
 | macOS | system ncurses | `make` |
 | Linux | `libncursesw` (`apt install libncurses-dev`) | `make` |
-| Windows | PDCurses (wide build) via MSYS2: `pacman -S mingw-w64-x86_64-pdcurses` | `make` in a MinGW shell |
+| Windows | PDCursesMod via MSYS2: `pacman -S make mingw-w64-x86_64-gcc mingw-w64-x86_64-pdcurses` | `make` in a MinGW64 shell |
 
 Windows builds use a thread for sync and a re-launched `hopes.exe --sync-flush` to push on quit; macOS and
 Linux fork instead. Config and data live in `%APPDATA%` and `%LOCALAPPDATA%` on Windows.
