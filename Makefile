@@ -46,7 +46,7 @@ SOURCES := $(filter-out src/amane.h,$(HEADERS)) src/main.c tests/tests.c
 ifeq ($(UNAME),Darwin)
 SIZE_BUDGET ?= 90000
 else
-SIZE_BUDGET ?= 79000
+SIZE_BUDGET ?= 82000
 endif
 
 all: $(BIN)

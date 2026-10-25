@@ -1368,6 +1368,11 @@ static void test_files_from_other_editors(void)
     put_env("HOPES_CONFIG", path);
     config_load(&cfg);
     CHECK(cfg.sync_enabled == 0);
+    free(cfg.remote);
+    free(cfg.branch);
+    free(cfg.sync_dir);
+    free(cfg.dir);
+    tags_free(cfg.command);
     put_env("HOPES_CONFIG", NULL);
     remove_tree(root);
 }

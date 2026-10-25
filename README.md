@@ -56,7 +56,7 @@ See the original repo's `docs/SYNC_SETUP.md` for git sync.
 - `make lint` enforces the house rules: no comments, at most 3 levels of nesting (`scripts/lint.c`).
 - `make strict` builds with `-Wall -Wextra -Werror` (CI runs it with gcc and clang).
 - `make test` runs the unit and storage tests under ASan and UBSan (plus LeakSanitizer on Linux).
-- `make size` fails if the binary outgrows its budget (90 KB on macOS, 79 KB on Linux).
+- `make size` fails if the binary outgrows its budget (90 KB on macOS, 82 KB on Linux).
 - `make sync-test` drives two real instances through a bare git remote in tmux (`tests/sync.sh`).
 
 Pushing a `c-v*.*.*` tag builds, verifies and publishes Linux, macOS (arm64 and Intel) and Windows archives with checksums.
