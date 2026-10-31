@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'c-v*.*.*'
+      - 'v*.*.*'
 
 permissions:
   contents: write
@@ -16,60 +16,66 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: linux-x86_64
+          - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-          - target: macos-aarch64
+            bin_name: hopes
+            asset_suffix: linux-x86_64.tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-13
+            bin_name: hopes
+            asset_suffix: macos-x86_64.tar.gz
+          - target: aarch64-apple-darwin
             os: macos-latest
-          - target: macos-x86_64
-            os: macos-15-intel
-          - target: windows-x86_64
+            bin_name: hopes
+            asset_suffix: macos-aarch64.tar.gz
+          - target: x86_64-pc-windows-msvc
             os: windows-latest
+            bin_name: hopes.exe
+            asset_suffix: windows-x86_64.zip
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libncurses-dev tmux
-
-      - name: Install dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: brew install tmux
-
-      - uses: msys2/setup-msys2@v2
-        if: runner.os == 'Windows'
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            make
-            zip
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-pdcurses
+          targets: ${{ matrix.target }}
 
-      - name: Verify (Unix)
-        if: runner.os != 'Windows'
-        run: make check
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
 
-      - name: Package (Unix)
-        if: runner.os != 'Windows'
+      - name: Build Release Binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package Unix Archive
+        if: matrix.os != 'windows-latest'
         run: |
-          tar -czf hopes-${{ matrix.target }}.tar.gz -C build hopes
-          shasum -a 256 hopes-${{ matrix.target }}.tar.gz > hopes-${{ matrix.target }}.tar.gz.sha256
+          tar -czf hopes-${{ matrix.asset_suffix }} -C target/${{ matrix.target }}/release ${{ matrix.bin_name }}
 
-      - name: Build and package (Windows)
-        if: runner.os == 'Windows'
-        shell: msys2 {0}
+      - name: Package Windows Archive
+        if: matrix.os == 'windows-latest'
+        shell: bash
         run: |
-          make
-          ./build/hopes.exe --version
-          zip -j hopes-${{ matrix.target }}.zip build/hopes.exe
-          sha256sum hopes-${{ matrix.target }}.zip > hopes-${{ matrix.target }}.zip.sha256
+          7z a hopes-${{ matrix.asset_suffix }} ./target/${{ matrix.target }}/release/${{ matrix.bin_name }}
 
-      - name: Upload release assets
+      - name: Generate Checksum (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          sha256sum hopes-${{ matrix.asset_suffix }} > hopes-${{ matrix.asset_suffix }}.sha256
+
+      - name: Generate Checksum (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          sha256sum hopes-${{ matrix.asset_suffix }} > hopes-${{ matrix.asset_suffix }}.sha256
+
+      - name: Upload Release Assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            hopes-${{ matrix.target }}.*
+            hopes-${{ matrix.asset_suffix }}
+            hopes-${{ matrix.asset_suffix }}.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

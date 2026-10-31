@@ -2,10 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, master, c-lean]
+    branches: [main, master]
   pull_request:
-    branches: [main, master, c-lean]
-  workflow_dispatch:
+    branches: [main, master]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -13,22 +12,24 @@ concurrency:
 
 jobs:
   lint:
-    name: Lint & Warnings
+    name: Lint & Format
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libncurses-dev
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
-      - name: Style rules (no comments, max nesting)
-        run: make lint
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
 
-      - name: Warnings as errors (gcc)
-        run: make strict
+      - name: Format Check
+        run: cargo fmt --check
 
-      - name: Warnings as errors (clang)
-        run: make CC=clang strict
+      - name: Clippy Check
+        run: cargo clippy --all-targets -- -D warnings
 
   test:
     name: Test (${{ matrix.os }})
@@ -37,55 +38,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libncurses-dev libsqlite3-dev tmux
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Install dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: brew install tmux
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
 
-      - name: Unit tests (ASan, UBSan, LeakSanitizer on Linux)
-        run: make test
-
-      - name: Sqlite backend tests
-        if: runner.os == 'Linux'
-        run: make SQLITE=1 test
-
-      - name: Binary size budget
-        run: make size
-
-      - name: Two-device git sync
-        run: make sync-test
-
-  windows:
-    name: Build (windows-latest)
-    needs: lint
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: msys2 {0}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            make
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-pdcurses
-
-      - name: Build
-        run: make
-
-      - name: Smoke test
-        run: ./build/hopes.exe --version
-
-      - name: Unit tests
-        run: make test
+      - name: Run Tests
+        run: cargo test --all-targets
