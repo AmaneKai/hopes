@@ -287,9 +287,7 @@ impl AppState {
             }
         }
 
-        if stats.total > 0 {
-            stats.percent = stats.complete * 100 / stats.total;
-        }
+        stats.percent = (stats.complete * 100).checked_div(stats.total).unwrap_or(0);
         self.stats = stats;
         self.kanban_cols = columns;
 

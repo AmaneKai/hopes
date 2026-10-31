@@ -278,10 +278,8 @@ fn parse_month_day(words: &[&str], today: NaiveDate) -> Option<NaiveDate> {
     let (first, second) = (words[0], words[1]);
     let (month, day) = if let Some(month) = month_of(first) {
         (month, day_number(second)?)
-    } else if let Some(month) = month_of(second) {
-        (month, day_number(first)?)
     } else {
-        return None;
+        (month_of(second)?, day_number(first)?)
     };
 
     let year = match words.get(2) {

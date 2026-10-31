@@ -193,15 +193,11 @@ impl Component for TableComponent {
         match action {
             Action::DeleteTask(_) | Action::DataReloaded => self.clamp(count),
             Action::SelectIndex(i) => self.table_state.select(Some(*i)),
-            Action::SelectNext => {
-                if state.view_mode == ViewMode::Table {
-                    self.next(count);
-                }
+            Action::SelectNext if state.view_mode == ViewMode::Table => {
+                self.next(count);
             }
-            Action::SelectPrev => {
-                if state.view_mode == ViewMode::Table {
-                    self.prev(count);
-                }
+            Action::SelectPrev if state.view_mode == ViewMode::Table => {
+                self.prev(count);
             }
             _ => {}
         }

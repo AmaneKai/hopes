@@ -138,15 +138,11 @@ impl Component for KanbanComponent {
     fn update(&mut self, action: &Action, state: &AppState) {
         match action {
             Action::ShiftTaskStatus { forward, .. } => self.follow_card(*forward),
-            Action::SelectNext => {
-                if state.view_mode == ViewMode::Kanban {
-                    self.next(self.column_len(state));
-                }
+            Action::SelectNext if state.view_mode == ViewMode::Kanban => {
+                self.next(self.column_len(state));
             }
-            Action::SelectPrev => {
-                if state.view_mode == ViewMode::Kanban {
-                    self.prev(self.column_len(state));
-                }
+            Action::SelectPrev if state.view_mode == ViewMode::Kanban => {
+                self.prev(self.column_len(state));
             }
             _ => {}
         }
