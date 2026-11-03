@@ -2,4 +2,4 @@
 **/*.rs.bk
 *.tmp
 items.json
-
+.DS_Store
