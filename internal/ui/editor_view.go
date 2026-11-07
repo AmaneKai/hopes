@@ -24,7 +24,7 @@ func layoutForm(inner Rect) formRows {
 }
 
 func (e *editor) render(c *Canvas, area Rect, s *domain.AppState, _ bool) {
-	title := map[bool]string{true: "New task", false: "Edit task"}[e.editIdx == newTask]
+	title := pick(e.editIdx == newTask, "New task", "Edit task")
 	inner := popupFrame(c, area, title, formWidth, formHeight)
 	rows := layoutForm(inner)
 	e.textRow(c, rows.title, fieldTitle, "Title", "Untitled")
@@ -111,7 +111,7 @@ func (e *editor) chipsRow(c *Canvas, row Rect, suggestions []string) {
 }
 
 func formHint(narrow, picking bool) []Span {
-	next := map[bool]string{true: "complete", false: "next"}[picking]
+	next := pick(picking, "complete", "next")
 	if narrow {
 		return []Span{
 			Styled("[^s] ", styleKey), Styled("save ", styleMuted),

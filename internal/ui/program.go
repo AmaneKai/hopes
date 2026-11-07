@@ -36,10 +36,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.PasteMsg:
 		m.App.Paste(msg.Content)
 	case syncMsg:
-		m.App.Send(SyncStatusChanged{gitsync.Status(msg)})
+		m.App.ApplySyncStatus(gitsync.Status(msg))
 		cmd = m.waitForSync()
 	}
-	m.App.ProcessActions()
 	if m.App.ShouldQuit() {
 		return m, tea.Quit
 	}

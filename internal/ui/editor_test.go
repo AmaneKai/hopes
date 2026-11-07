@@ -13,14 +13,14 @@ func stateWith(items ...domain.Item) *domain.AppState {
 
 func openedEditor(s *domain.AppState, st domain.Status) *editor {
 	e := newEditor()
-	e.update(OpenCreateModal{st}, s)
+	e.openCreate(s.Workspace, st)
 	return e
 }
 
-func feed(e *editor, s *domain.AppState, keys ...Key) Action {
-	var last Action
+func feed(e *editor, s *domain.AppState, keys ...Key) formResult {
+	last := formOpen
 	for _, k := range keys {
-		last, _ = e.handleKey(k, s)
+		last = e.handleKey(k, s)
 	}
 	return last
 }
@@ -31,20 +31,19 @@ func typed(e *editor, s *domain.AppState, text string) {
 	}
 }
 
-func draftOf(t *testing.T, act Action) TaskDraft {
+func draftOf(t *testing.T, e *editor, s *domain.AppState, keys ...Key) TaskDraft {
 	t.Helper()
-	save, ok := act.(SaveTask)
-	expectTrue(t, ok, "expected SaveTask")
-	return save.Draft
+	expect(t, feed(e, s, keys...), formSave)
+	return e.draft(s)
 }
 
 func TestEscLeavesInsertBeforeCancelling(t *testing.T) {
 	s := stateWith()
 	e := openedEditor(s, domain.Todo)
 	typed(e, s, "draft")
-	expect(t, feed(e, s, esc), nil)
+	expect(t, feed(e, s, esc), formOpen)
 	expectTrue(t, !e.TextInput().Insert, "should be in normal mode")
-	expect[Action](t, feed(e, s, esc), CloseModal{})
+	expect(t, feed(e, s, esc), formCancel)
 }
 
 func TestEscOnThePriorityFieldClosesAtOnce(t *testing.T) {
@@ -52,7 +51,7 @@ func TestEscOnThePriorityFieldClosesAtOnce(t *testing.T) {
 	e := openedEditor(s, domain.Todo)
 	feed(e, s, tab, tab)
 	expectTrue(t, e.TextInput() == nil, "priority has no text input")
-	expect[Action](t, feed(e, s, esc), CloseModal{})
+	expect(t, feed(e, s, esc), formCancel)
 }
 
 func TestTabbingBetweenFieldsResetsToInsertAtTheEnd(t *testing.T) {
@@ -68,9 +67,9 @@ func TestTabbingBetweenFieldsResetsToInsertAtTheEnd(t *testing.T) {
 func TestSavingNeedsATitleAndCarriesTheFormValues(t *testing.T) {
 	s := stateWith()
 	e := openedEditor(s, domain.InProgress)
-	expect(t, feed(e, s, enter), nil)
+	expect(t, feed(e, s, enter), formOpen)
 	typed(e, s, "  ship it  ")
-	d := draftOf(t, feed(e, s, tab, tab, Rune('1'), enter))
+	d := draftOf(t, e, s, tab, tab, Rune('1'), enter)
 	expect(t, d.ID, newTask)
 	expect(t, d.Title, "ship it")
 	expect(t, d.Priority, domain.Urgent)
@@ -84,9 +83,9 @@ func TestEnterInTheNotesFieldAddsALine(t *testing.T) {
 	typed(e, s, "title")
 	feed(e, s, tab)
 	typed(e, s, "one")
-	expect(t, feed(e, s, enter), nil)
+	expect(t, feed(e, s, enter), formOpen)
 	typed(e, s, "two")
-	expect(t, draftOf(t, feed(e, s, CtrlRune('s'))).Description, "one\ntwo")
+	expect(t, draftOf(t, e, s, CtrlRune('s')).Description, "one\ntwo")
 }
 
 func TestEditingAnExistingTaskLoadsItsFields(t *testing.T) {
@@ -94,8 +93,8 @@ func TestEditingAnExistingTaskLoadsItsFields(t *testing.T) {
 	task.Description, task.Priority = "details", domain.High
 	s := stateWith(task)
 	e := newEditor()
-	e.update(OpenEditModal{0}, s)
-	d := draftOf(t, feed(e, s, enter))
+	e.openEdit(0, s.Items[0])
+	d := draftOf(t, e, s, enter)
 	expect(t, d.ID, 0)
 	expect(t, d.Title+"|"+d.Description+"|"+d.Workspace, "Existing|details|Work")
 	expect(t, d.Priority, domain.High)
@@ -105,15 +104,15 @@ func TestReopeningTheFormStartsBlank(t *testing.T) {
 	s := stateWith()
 	e := openedEditor(s, domain.Todo)
 	typed(e, s, "leftover")
-	e.update(OpenCreateModal{domain.Todo}, s)
-	expect(t, feed(e, s, enter), nil)
+	e.openCreate(s.Workspace, domain.Todo)
+	expect(t, feed(e, s, enter), formOpen)
 }
 
 func TestCtrlCCancelsFromAnyField(t *testing.T) {
 	s := stateWith()
 	e := openedEditor(s, domain.Todo)
 	typed(e, s, "abc")
-	expect[Action](t, feed(e, s, CtrlRune('c')), CloseModal{})
+	expect(t, feed(e, s, CtrlRune('c')), formCancel)
 }
 
 var down = Special(KeyDown)
@@ -135,7 +134,7 @@ func atWorkspace(s *domain.AppState) *editor {
 
 func savedWorkspace(t *testing.T, e *editor, s *domain.AppState) string {
 	t.Helper()
-	return draftOf(t, feed(e, s, enter)).Workspace
+	return draftOf(t, e, s, enter).Workspace
 }
 
 func TestANewTaskDefaultsToTheCurrentWorkspace(t *testing.T) {

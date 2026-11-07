@@ -9,106 +9,55 @@ import (
 	"github.com/AmaneKai/hopes/internal/gitsync"
 )
 
-func (a *App) apply(act Action) {
-	if a.applyView(act) || a.applyWorkspace(act) || a.applyTask(act) {
-		return
-	}
-	a.applySync(act)
+func (a *App) focusNav()  { a.State.Focus = domain.FocusNav }
+func (a *App) focusMain() { a.State.Focus = domain.FocusMain }
+
+func (a *App) cycleSort() {
+	a.State.SortMode = a.State.SortMode.Next()
+	a.refresh()
+	a.State.SetStatus("Sort: " + a.State.SortMode.Label())
 }
 
-func (a *App) applyView(act Action) bool {
-	switch act := act.(type) {
-	case Quit:
-		a.quit = true
-	case ToggleFocus:
-		a.State.Focus = a.State.Focus.Other()
-	case SetFocus:
-		a.State.Focus = act.Pane
-	case ToggleViewMode:
-		a.toggleViewMode()
-	case CycleSort:
-		a.State.SortMode = a.State.SortMode.Next()
-		a.State.RefreshCache()
-		a.State.SetStatus("Sort: " + a.State.SortMode.Label())
-	case OpenCreateModal:
-		a.mode = ModeCreating
-	case OpenEditModal:
-		a.openEdit(act.Index)
-	case OpenFind:
-		a.mode = ModeFinding
-	case OpenCommand:
-		a.mode = ModeCommand
-	case OpenHelp:
-		a.mode = ModeHelp
-	case CloseModal:
-		a.mode = ModeNormal
-	case RunCommand:
-		a.runCommand(act.Line)
-	default:
-		return false
-	}
-	return true
+func (a *App) refresh() {
+	a.State.RefreshCache()
+	a.table.clamp(a.State)
 }
 
-func (a *App) applyWorkspace(act Action) bool {
-	switch act := act.(type) {
-	case SwitchWorkspace:
-		a.switchWorkspace(act.Name)
-	case CycleWorkspace:
-		a.cycleWorkspace(act.Forward)
-	case RenameWorkspace:
-		a.renameWorkspace(act.Name)
-	case SetFilter:
-		a.State.Filter, a.State.HasFilter = act.Query, act.Query != ""
-		a.filterChanged()
-	case ClearFilter:
-		a.clearFilter()
-	default:
-		return false
-	}
-	return true
+func (a *App) openCreate(status domain.Status) {
+	a.editor.openCreate(a.State.Workspace, status)
+	a.mode = ModeCreating
 }
 
-func (a *App) applyTask(act Action) bool {
-	switch act := act.(type) {
-	case SaveTask:
-		a.saveTask(act.Draft)
-	case DeleteTask:
-		a.deleteTask(act.Index)
-	case UndoDelete:
-		a.undoDelete()
-	case ToggleTaskStatus:
-		a.changeStatus(act.Index, domain.Status.Next, "Status changed to ")
-	case ShiftTaskStatus:
-		a.changeStatus(act.Index, statusStep(act.Forward), "Shifted task to ")
-	case SetPriority:
-		a.setPriority(act.Index, act.Priority)
-	case CyclePriority:
-		a.cyclePriority(act.Index, act.Forward)
-	case MoveTask:
-		a.moveTask(act.Index, act.Up)
-	default:
-		return false
-	}
-	return true
+func (a *App) openFind() {
+	a.cmdline.open(true, a.State.Filter)
+	a.mode = ModeFinding
 }
 
-func (a *App) applySync(act Action) {
-	switch act := act.(type) {
-	case SyncRequested:
-		a.sync.RequestPush()
-	case ForceSync:
-		a.triggerManualSync()
-	case SyncStatusChanged:
-		a.applySyncStatus(act.Status)
-	}
+func (a *App) openCommand() {
+	a.cmdline.open(false, "")
+	a.mode = ModeCommand
 }
 
-func statusStep(forward bool) func(domain.Status) domain.Status {
-	if forward {
-		return domain.Status.Next
+func (a *App) openHelp() {
+	a.help.scroll = 0
+	a.mode = ModeHelp
+}
+
+func (a *App) closeModal() {
+	a.help.scroll = 0
+	a.mode = ModeNormal
+}
+
+func (a *App) setFilter(query string) {
+	a.State.Filter, a.State.HasFilter = query, query != ""
+	a.filterChanged()
+}
+
+func (a *App) jumpTo(index int) {
+	ws := a.State.Workspaces()
+	if index >= 0 && index < len(ws) && ws[index].Name != a.State.Workspace {
+		a.switchWorkspace(ws[index].Name)
 	}
-	return domain.Status.Prev
 }
 
 func (a *App) toggleViewMode() {
@@ -122,7 +71,8 @@ func (a *App) toggleViewMode() {
 }
 
 func (a *App) openEdit(idx int) {
-	if idx >= 0 && idx < len(a.State.Items) {
+	if it := a.item(idx); it != nil {
+		a.editor.openEdit(idx, *it)
 		a.mode = ModeEditing
 	}
 }
@@ -141,13 +91,13 @@ func (a *App) persist() error {
 	if err := a.store.Save(a.State.Items); err != nil {
 		return fmt.Errorf("save failed: %v", err)
 	}
-	a.Send(SyncRequested{})
+	a.sync.RequestPush()
 	return nil
 }
 
 func (a *App) commit(status string) {
 	err := a.persist()
-	a.State.RefreshCache()
+	a.refresh()
 	if err != nil {
 		status = "Warning: " + err.Error()
 	}
@@ -155,14 +105,15 @@ func (a *App) commit(status string) {
 }
 
 func (a *App) selectItem(idx int) {
-	if pos := slices.Index(a.State.FilteredIndices(), idx); pos >= 0 {
-		a.Send(SelectIndex{pos})
+	visible := a.State.FilteredIndices()
+	if pos := slices.Index(visible, idx); pos >= 0 {
+		a.table.moveTo(pos, len(visible))
 	}
 }
 
 func (a *App) filterChanged() {
 	a.State.RefreshCache()
-	a.Send(SelectIndex{0})
+	a.table.moveTo(0, len(a.State.FilteredIndices()))
 }
 
 func (a *App) openWorkspace(name string) {
@@ -221,7 +172,7 @@ func (a *App) commitIf(changed bool, status string) {
 		a.commit(status)
 		return
 	}
-	a.State.RefreshCache()
+	a.refresh()
 	a.State.SetStatus(status)
 }
 
@@ -251,7 +202,7 @@ func (a *App) runCommand(line string) {
 	case "w":
 		a.State.SetStatus("Already saved automatically")
 	case "help", "h":
-		a.Send(OpenHelp{})
+		a.openHelp()
 		return
 	case "":
 	default:
@@ -269,7 +220,7 @@ func (a *App) triggerManualSync() {
 	a.State.SetStatus("Manual sync requested")
 }
 
-func (a *App) applySyncStatus(status gitsync.Status) {
+func (a *App) ApplySyncStatus(status gitsync.Status) {
 	switch status.Kind {
 	case gitsync.UpdatedRemoteData:
 		a.reloadFromDisk()
@@ -292,6 +243,5 @@ func (a *App) reloadFromDisk() {
 	}
 	a.loadErr = nil
 	a.State.Items = items
-	a.State.RefreshCache()
-	a.Send(DataReloaded{})
+	a.refresh()
 }

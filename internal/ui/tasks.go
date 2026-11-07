@@ -69,6 +69,14 @@ func (a *App) undoDelete() {
 	a.selectItem(at)
 }
 
+func (a *App) toggleStatus(idx int) {
+	a.changeStatus(idx, domain.Status.Next, "Status changed to ")
+}
+
+func (a *App) shiftStatus(idx int, forward bool) {
+	a.changeStatus(idx, pick(forward, domain.Status.Next, domain.Status.Prev), "Shifted task to ")
+}
+
 func (a *App) changeStatus(idx int, step func(domain.Status) domain.Status, prefix string) {
 	if it := a.item(idx); it != nil {
 		it.Status = step(it.Status)
@@ -108,7 +116,7 @@ func (a *App) moveTask(idx int, up bool) {
 	target := visible[other]
 	items := a.State.Items
 	items[idx], items[target] = items[target], items[idx]
-	direction := map[bool]string{true: "up", false: "down"}[up]
+	direction := pick(up, "up", "down")
 	a.commit("Moved task " + direction)
 	a.selectItem(target)
 }

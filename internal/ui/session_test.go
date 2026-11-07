@@ -65,7 +65,6 @@ func writeFile(t *testing.T, dir, name, content string) string {
 func (s *session) press(keys ...Key) {
 	for _, k := range keys {
 		s.app.HandleKey(k)
-		s.app.ProcessActions()
 	}
 }
 
@@ -79,11 +78,6 @@ func (s *session) command(line string) {
 	s.press(Rune(':'))
 	s.typeStr(line)
 	s.press(Special(KeyEnter))
-}
-
-func (s *session) dispatch(act Action) {
-	s.app.Send(act)
-	s.app.ProcessActions()
 }
 
 func (s *session) items() []domain.Item { return s.app.State.Items }

@@ -25,6 +25,25 @@ const (
 	narrowInner = 48
 )
 
+type formResult int
+
+const (
+	formOpen formResult = iota
+	formSave
+	formCancel
+)
+
+type TaskDraft struct {
+	ID          int
+	Title       string
+	Description string
+	Priority    domain.Priority
+	Workspace   string
+	Status      domain.Status
+}
+
+const newTask = -1
+
 type editor struct {
 	values   [fieldCount]string
 	priority domain.Priority
@@ -107,11 +126,7 @@ func (e *editor) pickTarget() int {
 	return 0
 }
 
-func (e *editor) saveAction(s *domain.AppState) (Action, bool) {
-	title := strings.TrimSpace(e.values[fieldTitle])
-	if title == "" {
-		return nil, true
-	}
+func (e *editor) draft(s *domain.AppState) TaskDraft {
 	workspace := strings.TrimSpace(e.values[fieldWorkspace])
 	if existing, ok := s.FindWorkspace(workspace); ok {
 		workspace = existing
@@ -119,38 +134,46 @@ func (e *editor) saveAction(s *domain.AppState) (Action, bool) {
 	if workspace == "" {
 		workspace = s.Workspace
 	}
-	return SaveTask{TaskDraft{
-		ID: e.editIdx, Title: title, Description: strings.TrimSpace(e.values[fieldNotes]),
-		Priority: e.priority, Workspace: workspace, Status: e.status,
-	}}, true
+	return TaskDraft{
+		ID: e.editIdx, Title: strings.TrimSpace(e.values[fieldTitle]),
+		Description: strings.TrimSpace(e.values[fieldNotes]),
+		Priority:    e.priority, Workspace: workspace, Status: e.status,
+	}
 }
 
-func (e *editor) handleKey(k Key, s *domain.AppState) (Action, bool) {
+func (e *editor) saveResult() formResult {
+	if strings.TrimSpace(e.values[fieldTitle]) == "" {
+		return formOpen
+	}
+	return formSave
+}
+
+func (e *editor) handleKey(k Key, s *domain.AppState) formResult {
 	if k.IsCtrl('c') {
-		return CloseModal{}, true
+		return formCancel
 	}
 	if k.Code == KeyEsc {
 		return e.escape()
 	}
 	if e.handlePicker(k, e.suggestions(s)) {
-		return nil, true
+		return formOpen
 	}
 	if (k.Code == KeyEnter && e.field != fieldNotes) || k.IsCtrl('s') {
-		return e.saveAction(s)
+		return e.saveResult()
 	}
 	if delta := fieldStep(k, e.field == fieldNotes); delta != 0 {
 		e.moveField(delta)
-		return nil, true
+		return formOpen
 	}
 	e.edit(k)
-	return nil, true
+	return formOpen
 }
 
-func (e *editor) escape() (Action, bool) {
+func (e *editor) escape() formResult {
 	if buf := e.buffer(); buf != nil && e.input.HandleEsc(buf) {
-		return nil, true
+		return formOpen
 	}
-	return CloseModal{}, true
+	return formCancel
 }
 
 func fieldStep(k Key, multiline bool) int {
@@ -213,20 +236,11 @@ func priorityOr(d rune, fallback domain.Priority) domain.Priority {
 	return fallback
 }
 
-func (e *editor) update(act Action, s *domain.AppState) {
-	switch act := act.(type) {
-	case OpenCreateModal:
-		e.open([fieldCount]string{fieldWorkspace: s.Workspace}, domain.Medium, newTask, act.Status)
-	case OpenEditModal:
-		e.openEdit(act.Index, s)
-	}
+func (e *editor) openCreate(workspace string, status domain.Status) {
+	e.open([fieldCount]string{fieldWorkspace: workspace}, domain.Medium, newTask, status)
 }
 
-func (e *editor) openEdit(idx int, s *domain.AppState) {
-	if idx < 0 || idx >= len(s.Items) {
-		return
-	}
-	it := s.Items[idx]
+func (e *editor) openEdit(idx int, it domain.Item) {
 	values := [fieldCount]string{fieldTitle: it.Title, fieldNotes: it.Description}
 	values[fieldWorkspace] = it.Workspace
 	e.open(values, it.Priority, idx, it.Status)

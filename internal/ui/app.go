@@ -26,7 +26,6 @@ type App struct {
 	quit    bool
 	store   storage.Storage
 	sync    *gitsync.Engine
-	queue   []Action
 	loadErr error
 
 	table   *tableView
@@ -69,32 +68,6 @@ func (a *App) ShutdownSync() { a.sync.Shutdown() }
 
 func (a *App) Mode() Mode       { return a.mode }
 func (a *App) ShouldQuit() bool { return a.quit }
-func (a *App) Send(act Action)  { a.queue = append(a.queue, act) }
-
-func (a *App) ProcessActions() {
-	for len(a.queue) > 0 {
-		act := a.queue[0]
-		a.queue = a.queue[1:]
-		a.process(act)
-	}
-}
-
-func (a *App) components() []component {
-	return []component{a.nav, a.table, a.board, a.editor, a.help, a.cmdline}
-}
-
-func (a *App) process(act Action) {
-	if batch, ok := act.(Batch); ok {
-		for _, inner := range batch {
-			a.process(inner)
-		}
-		return
-	}
-	a.apply(act)
-	for _, c := range a.components() {
-		c.update(act, a.State)
-	}
-}
 
 func (a *App) view() taskView {
 	if a.State.ViewMode == domain.Kanban {
@@ -108,19 +81,24 @@ func (a *App) SelectedIndex() (int, bool) { return a.view().selectedIndex(a.Stat
 func (a *App) PendingChord() string { return a.view().pendingLabel() }
 
 func (a *App) HandleKey(k Key) {
-	var act Action
 	switch a.mode {
 	case ModeNormal:
-		act, _ = a.normalKey(k)
+		a.normalKey(k)
 	case ModeCreating, ModeEditing:
-		act, _ = a.editor.handleKey(k, a.State)
+		a.editorKey(k)
 	case ModeFinding, ModeCommand:
-		act, _ = a.cmdline.handleKey(k, a.State)
+		a.cmdline.handleKey(k, a)
 	case ModeHelp:
-		act, _ = a.help.handleKey(k, a.State)
+		a.help.handleKey(k, a)
 	}
-	if act != nil {
-		a.Send(act)
+}
+
+func (a *App) editorKey(k Key) {
+	switch a.editor.handleKey(k, a.State) {
+	case formSave:
+		a.saveTask(a.editor.draft(a.State))
+	case formCancel:
+		a.closeModal()
 	}
 }
 
@@ -133,65 +111,66 @@ func (a *App) Paste(text string) {
 	}
 }
 
-func (a *App) normalKey(k Key) (Action, bool) {
+func (a *App) normalKey(k Key) {
 	if !k.IsAny('g', 'd') {
 		a.table.clearPending()
 		a.board.clearPending()
 	}
-	if act, ok := frameKey(k); ok {
-		return act, true
+	if a.frameKey(k) {
+		return
 	}
-	if a.State.Focus == domain.FocusNav {
-		if act, ok := a.nav.handleKey(k, a.State); ok {
-			return act, true
-		}
+	if a.State.Focus == domain.FocusNav && a.nav.handleKey(k, a) {
+		return
 	}
-	if act, ok := a.view().handleKey(k, a.State); ok {
-		return act, true
+	if !a.view().handleKey(k, a) {
+		a.globalKey(k)
 	}
-	return globalKey(k)
 }
 
-func frameKey(k Key) (Action, bool) {
+func (a *App) frameKey(k Key) bool {
 	switch {
 	case k.Is('q') || k.IsCtrl('c'):
-		return Quit{}, true
+		a.quit = true
 	case k.Code == KeyTab:
-		return CycleWorkspace{Forward: true}, true
+		a.cycleWorkspace(true)
 	case k.Code == KeyBackTab:
-		return CycleWorkspace{Forward: false}, true
+		a.cycleWorkspace(false)
 	case k.IsCtrl('w'):
-		return ToggleFocus{}, true
+		a.State.Focus = a.State.Focus.Other()
+	default:
+		return false
 	}
-	return nil, false
+	return true
 }
 
-var globalKeys = map[rune]Action{
-	'v': ToggleViewMode{},
-	's': CycleSort{},
-	'h': SetFocus{domain.FocusNav},
-	'l': SetFocus{domain.FocusMain},
-	'u': UndoDelete{},
-	'/': OpenFind{},
-	':': OpenCommand{},
-	'?': OpenHelp{},
-	'S': ForceSync{},
+var globalKeys = map[rune]func(*App){
+	'v': (*App).toggleViewMode,
+	's': (*App).cycleSort,
+	'h': (*App).focusNav,
+	'l': (*App).focusMain,
+	'u': (*App).undoDelete,
+	'/': (*App).openFind,
+	':': (*App).openCommand,
+	'?': (*App).openHelp,
+	'S': (*App).triggerManualSync,
 }
 
-var globalSpecialKeys = map[KeyCode]Action{
-	KeyLeft:  SetFocus{domain.FocusNav},
-	KeyRight: SetFocus{domain.FocusMain},
-	KeyEsc:   ClearFilter{},
-	KeyF5:    ForceSync{},
+var globalSpecialKeys = map[KeyCode]func(*App){
+	KeyLeft:  (*App).focusNav,
+	KeyRight: (*App).focusMain,
+	KeyEsc:   (*App).clearFilter,
+	KeyF5:    (*App).triggerManualSync,
 }
 
-func globalKey(k Key) (Action, bool) {
-	if act, ok := globalSpecialKeys[k.Code]; ok {
-		return act, true
+func (a *App) globalKey(k Key) {
+	if cmd, ok := globalSpecialKeys[k.Code]; ok {
+		cmd(a)
+		return
 	}
 	if k.Code != KeyRune || k.Ctrl {
-		return nil, false
+		return
 	}
-	act, ok := globalKeys[k.Rune]
-	return act, ok
+	if cmd, ok := globalKeys[k.Rune]; ok {
+		cmd(a)
+	}
 }

@@ -49,7 +49,7 @@ func summary(s *domain.AppState) []Span {
 	dot := Styled("  ·  ", styleGhost)
 	spans := []Span{Styled("Empty", styleMuted)}
 	if stats.Total > 0 {
-		noun := map[bool]string{true: "task", false: "tasks"}[stats.Total == 1]
+		noun := pick(stats.Total == 1, "task", "tasks")
 		spans = []Span{
 			Styled(fmt.Sprintf("%d %s", stats.Total, noun), styleMuted), dot,
 			Styled(fmt.Sprintf("%d open", stats.Todo+stats.InProgress), styleMuted), dot,

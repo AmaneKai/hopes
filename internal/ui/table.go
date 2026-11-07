@@ -55,11 +55,13 @@ func (t *tableView) moveTo(row, count int) {
 
 func (t *tableView) step(delta, count int) { t.moveTo(max(t.selected, 0)+delta, count) }
 
-func (t *tableView) handleKey(k Key, s *domain.AppState) (Action, bool) {
-	count := len(s.FilteredIndices())
-	idx, ok := t.selectedIndex(s)
-	if act, handled := taskCommand(k, idx, ok); handled {
-		return act, true
+func (t *tableView) clamp(s *domain.AppState) { t.moveTo(t.selected, len(s.FilteredIndices())) }
+
+func (t *tableView) handleKey(k Key, a *App) bool {
+	count := len(a.State.FilteredIndices())
+	idx, ok := t.selectedIndex(a.State)
+	if runTaskCommand(k, a, idx, ok) {
+		return true
 	}
 	switch {
 	case k.IsCtrl('d') || k.Code == KeyPageDown:
@@ -76,44 +78,24 @@ func (t *tableView) handleKey(k Key, s *domain.AppState) (Action, bool) {
 		t.moveTo(0, count)
 	case k.Is('g'):
 	default:
-		return t.taskKey(k, idx, ok)
+		return t.taskKey(k, a, idx, ok)
 	}
-	return nil, true
+	return true
 }
 
-func (t *tableView) taskKey(k Key, idx int, ok bool) (Action, bool) {
+func (t *tableView) taskKey(k Key, a *App, idx int, ok bool) bool {
 	switch {
 	case k.Is('d') && t.chords.pressD():
-		return onSelected(idx, ok, func(i int) Action { return DeleteTask{i} })
+		runOnSelected(a.deleteTask, idx, ok)
 	case k.Is('d'):
-		return nil, true
 	case k.IsAny('a', 'o', 'i'):
-		return OpenCreateModal{domain.Todo}, true
+		a.openCreate(domain.Todo)
 	case k.Is(' '):
-		return onSelected(idx, ok, func(i int) Action { return ToggleTaskStatus{i} })
+		runOnSelected(a.toggleStatus, idx, ok)
+	default:
+		return false
 	}
-	return nil, false
-}
-
-func (t *tableView) update(act Action, s *domain.AppState) {
-	count := len(s.FilteredIndices())
-	switch act := act.(type) {
-	case DeleteTask, DataReloaded, SaveTask,
-		SwitchWorkspace, CycleWorkspace, SetFilter, ClearFilter:
-		t.moveTo(t.selected, count)
-	case SelectIndex:
-		t.moveTo(act.Position, count)
-	case SelectNext:
-		t.stepIfTable(1, count, s)
-	case SelectPrev:
-		t.stepIfTable(-1, count, s)
-	}
-}
-
-func (t *tableView) stepIfTable(delta, count int, s *domain.AppState) {
-	if s.ViewMode == domain.Table {
-		t.step(delta, count)
-	}
+	return true
 }
 
 func tableColumns(r Rect) []Rect {

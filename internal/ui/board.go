@@ -39,11 +39,11 @@ func (b *boardView) moveCard(delta, count int) {
 
 func (b *boardView) moveColumn(delta int) { b.col = max(min(b.col+delta, 2), 0) }
 
-func (b *boardView) handleKey(k Key, s *domain.AppState) (Action, bool) {
-	count := b.columnLen(s)
-	idx, ok := b.selectedIndex(s)
-	if act, handled := taskCommand(k, idx, ok); handled {
-		return act, true
+func (b *boardView) handleKey(k Key, a *App) bool {
+	count := b.columnLen(a.State)
+	idx, ok := b.selectedIndex(a.State)
+	if runTaskCommand(k, a, idx, ok) {
+		return true
 	}
 	switch {
 	case k.Is('j') || k.Code == KeyDown:
@@ -60,38 +60,32 @@ func (b *boardView) handleKey(k Key, s *domain.AppState) (Action, bool) {
 		b.cursor[b.col] = 0
 	case k.Is('g'):
 	default:
-		return b.cardKey(k, idx, ok)
+		return b.cardKey(k, a, idx, ok)
 	}
-	return nil, true
+	return true
 }
 
-func (b *boardView) cardKey(k Key, idx int, ok bool) (Action, bool) {
+func (b *boardView) cardKey(k Key, a *App, idx int, ok bool) bool {
 	switch {
 	case k.Is('d') && b.chords.pressD():
-		return onSelected(idx, ok, func(i int) Action { return DeleteTask{i} })
+		runOnSelected(a.deleteTask, idx, ok)
 	case k.Is('d'):
-		return nil, true
 	case k.IsAny('H', 'L', ' '):
-		forward := !k.Is('H')
-		return onSelected(idx, ok, func(i int) Action { return ShiftTaskStatus{i, forward} })
+		b.shift(a, idx, ok, !k.Is('H'))
 	case k.IsAny('a', 'o', 'i'):
-		return OpenCreateModal{b.status()}, true
+		a.openCreate(b.status())
+	default:
+		return false
 	}
-	return nil, false
+	return true
 }
 
-func (b *boardView) update(act Action, s *domain.AppState) {
-	if s.ViewMode != domain.Kanban {
+func (b *boardView) shift(a *App, idx int, ok, forward bool) {
+	if !ok {
 		return
 	}
-	switch act := act.(type) {
-	case ShiftTaskStatus:
-		b.moveColumn(map[bool]int{true: 1, false: -1}[act.Forward])
-	case SelectNext:
-		b.moveCard(1, b.columnLen(s))
-	case SelectPrev:
-		b.moveCard(-1, b.columnLen(s))
-	}
+	a.shiftStatus(idx, forward)
+	b.moveColumn(pick(forward, 1, -1))
 }
 
 func (b *boardView) render(c *Canvas, r Rect, s *domain.AppState, focused bool) {

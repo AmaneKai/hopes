@@ -2,17 +2,19 @@ package ui
 
 import "github.com/AmaneKai/hopes/internal/domain"
 
-type component interface {
-	handleKey(k Key, s *domain.AppState) (Action, bool)
-	update(a Action, s *domain.AppState)
-	render(c *Canvas, r Rect, s *domain.AppState, focused bool)
-}
-
 type taskView interface {
-	component
+	handleKey(k Key, a *App) bool
+	render(c *Canvas, r Rect, s *domain.AppState, focused bool)
 	selectedIndex(s *domain.AppState) (int, bool)
 	pendingLabel() string
 	clearPending()
+}
+
+func pick[T any](cond bool, yes, no T) T {
+	if cond {
+		return yes
+	}
+	return no
 }
 
 type chords struct{ g, d bool }
@@ -41,38 +43,47 @@ func (c *chords) label() string {
 	return ""
 }
 
-func onSelected(idx int, ok bool, build func(int) Action) (Action, bool) {
-	if !ok {
-		return nil, true
-	}
-	return build(idx), true
-}
-
-func taskCommand(k Key, idx int, ok bool) (Action, bool) {
+func taskCommand(k Key, a *App) func(int) {
 	switch {
 	case k.IsAny('e', 'c') || k.Code == KeyEnter:
-		return onSelected(idx, ok, func(i int) Action { return OpenEditModal{i} })
+		return a.openEdit
 	case k.Is('x'):
-		return onSelected(idx, ok, func(i int) Action { return DeleteTask{i} })
+		return a.deleteTask
 	case k.IsAny('J', 'K'):
 		up := k.Is('K')
-		return onSelected(idx, ok, func(i int) Action { return MoveTask{i, up} })
+		return func(i int) { a.moveTask(i, up) }
 	case k.IsAny('p', 'P'):
 		forward := k.Is('p')
-		return onSelected(idx, ok, func(i int) Action { return CyclePriority{i, forward} })
+		return func(i int) { a.cyclePriority(i, forward) }
 	}
-	if d, isDigit := k.Digit(); isDigit {
-		return setPriority(d, idx, ok)
-	}
-	return nil, false
+	return priorityCommand(k, a)
 }
 
-func setPriority(d rune, idx int, ok bool) (Action, bool) {
+func priorityCommand(k Key, a *App) func(int) {
+	d, isDigit := k.Digit()
+	if !isDigit {
+		return nil
+	}
 	p, valid := domain.PriorityFromDigit(d)
 	if !valid {
-		return nil, false
+		return nil
 	}
-	return onSelected(idx, ok, func(i int) Action { return SetPriority{i, p} })
+	return func(i int) { a.setPriority(i, p) }
+}
+
+func runOnSelected(cmd func(int), idx int, ok bool) {
+	if ok {
+		cmd(idx)
+	}
+}
+
+func runTaskCommand(k Key, a *App, idx int, ok bool) bool {
+	cmd := taskCommand(k, a)
+	if cmd == nil {
+		return false
+	}
+	runOnSelected(cmd, idx, ok)
+	return true
 }
 
 func scrollOffset(selected, length, rows, offset, pad int) int {

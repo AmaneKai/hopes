@@ -84,22 +84,14 @@ type helpPopup struct {
 	maxScroll int
 }
 
-func (h *helpPopup) handleKey(k Key, _ *domain.AppState) (Action, bool) {
+func (h *helpPopup) handleKey(k Key, a *App) {
 	switch {
 	case k.Code == KeyEsc || k.Code == KeyEnter || k.IsAny('?', 'q', ' '):
-		return CloseModal{}, true
+		a.closeModal()
 	case k.Is('j') || k.Code == KeyDown:
 		h.scroll = min(h.scroll+1, h.maxScroll)
 	case k.Is('k') || k.Code == KeyUp:
 		h.scroll = max(h.scroll-1, 0)
-	}
-	return nil, true
-}
-
-func (h *helpPopup) update(act Action, _ *domain.AppState) {
-	switch act.(type) {
-	case OpenHelp, CloseModal:
-		h.scroll = 0
 	}
 }
 

@@ -125,7 +125,7 @@ func TestReorderingSkipsTasksInOtherWorkspaces(t *testing.T) {
 
 func TestSearchStaysInsideTheCurrentWorkspace(t *testing.T) {
 	s := newSession(t, twoWorkspaces())
-	s.dispatch(SetFilter{"1"})
+	s.app.setFilter("1")
 	expectVisible(t, s, 0)
 	s.press(tab)
 	expectTrue(t, !s.app.State.HasFilter, "switching should clear the search")
@@ -289,7 +289,7 @@ func TestEscapeCancelsFindWithoutFiltering(t *testing.T) {
 
 func TestEscapeInNormalModeClearsTheFilter(t *testing.T) {
 	s := newSession(t, seed())
-	s.dispatch(SetFilter{"compiler"})
+	s.app.setFilter("compiler")
 	expectVisible(t, s, 0)
 	s.press(esc)
 	expectTrue(t, !s.app.State.HasFilter, "filter should clear")
@@ -302,7 +302,7 @@ func TestFiltersAndStatsReflectTheWorkspace(t *testing.T) {
 	expect(t, s.app.State.Stats().Todo, 3)
 	s.press(Rune(' '), Rune(' '))
 	expect(t, s.app.State.Stats().Percent, 33)
-	s.dispatch(SetFilter{"responsive"})
+	s.app.setFilter("responsive")
 	expectVisible(t, s, 1)
 }
 
@@ -397,7 +397,7 @@ func TestAPullThatShrinksTheListKeepsTheCursorOnARealRow(t *testing.T) {
 	s := newSession(t, seed())
 	s.press(Rune('G'))
 	must(t, openApp(s.dir).store.Save(seed()[:1]))
-	s.dispatch(SyncStatusChanged{syncPulled})
+	s.app.ApplySyncStatus(syncPulled)
 	expect(t, len(s.items()), 1)
 	expect(t, s.cursor(), 0)
 }
@@ -405,7 +405,7 @@ func TestAPullThatShrinksTheListKeepsTheCursorOnARealRow(t *testing.T) {
 func TestANewTaskIsSelectedWhereverSortingPutsIt(t *testing.T) {
 	s := newSession(t, seed())
 	s.app.State.SortMode = domain.SortTitle
-	s.dispatch(DataReloaded{})
+	s.app.refresh()
 	s.press(Rune('a'))
 	s.typeStr("AAA first alphabetically")
 	s.press(enter)

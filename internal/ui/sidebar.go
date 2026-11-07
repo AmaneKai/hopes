@@ -17,35 +17,28 @@ type sidebar struct {
 	offset int
 }
 
-func jumpTo(s *domain.AppState, index int) (Action, bool) {
-	ws := s.Workspaces()
-	if index < 0 || index >= len(ws) || ws[index].Name == s.Workspace {
-		return nil, true
-	}
-	return SwitchWorkspace{ws[index].Name}, true
-}
-
-func (n *sidebar) handleKey(k Key, s *domain.AppState) (Action, bool) {
-	here, last := s.WorkspacePosition(), len(s.Workspaces())-1
+func (n *sidebar) handleKey(k Key, a *App) bool {
+	here, last := a.State.WorkspacePosition(), len(a.State.Workspaces())-1
 	switch {
 	case k.Is('j') || k.Code == KeyDown:
-		return jumpTo(s, min(here+1, last))
+		a.jumpTo(min(here+1, last))
 	case k.Is('k') || k.Code == KeyUp:
-		return jumpTo(s, max(here-1, 0))
+		a.jumpTo(max(here-1, 0))
 	case k.Is('g') || k.Code == KeyHome:
-		return jumpTo(s, 0)
+		a.jumpTo(0)
 	case k.Is('G') || k.Code == KeyEnd:
-		return jumpTo(s, last)
+		a.jumpTo(last)
 	case k.IsAny('l', ' ') || k.Code == KeyEnter || k.Code == KeyRight:
-		return SetFocus{domain.FocusMain}, true
+		a.State.Focus = domain.FocusMain
+	default:
+		d, ok := k.Digit()
+		if !ok || d == '0' {
+			return false
+		}
+		a.jumpTo(int(d - '1'))
 	}
-	if d, ok := k.Digit(); ok && d != '0' {
-		return jumpTo(s, int(d-'1'))
-	}
-	return nil, false
+	return true
 }
-
-func (n *sidebar) update(Action, *domain.AppState) {}
 
 func (n *sidebar) render(c *Canvas, r Rect, s *domain.AppState, focused bool) {
 	c.Fill(r, styleSidebar)
