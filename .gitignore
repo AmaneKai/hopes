@@ -1,5 +1,6 @@
-/target
-**/*.rs.bk
+/hopes
+/hopes.exe
+/dist
 *.tmp
 items.json
 .DS_Store

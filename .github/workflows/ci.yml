@@ -17,19 +17,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Go
+        uses: actions/setup-go@v5
         with:
-          components: rustfmt, clippy
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+          go-version-file: go.mod
 
       - name: Format Check
-        run: cargo fmt --check
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
 
-      - name: Clippy Check
-        run: cargo clippy --all-targets -- -D warnings
+      - name: Vet
+        run: go vet ./...
 
   test:
     name: Test (${{ matrix.os }})
@@ -42,11 +39,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
 
       - name: Run Tests
-        run: cargo test --all-targets
+        run: go test ./...

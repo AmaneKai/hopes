@@ -49,7 +49,7 @@ there's nothing to point anywhere.
 # Build the app
 git clone git@github.com:AmaneKai/hopes.git ~/Github/hopes
 cd ~/Github/hopes
-cargo build --release
+go build -trimpath -ldflags "-s -w" .
 
 # Wire up sync in the default data directory
 cd ~/.local/share/hopes        # created automatically on first run of hopes,
@@ -61,7 +61,7 @@ git commit -m "Initial commit"
 git push -u origin main
 
 # Run it
-~/Github/hopes/target/release/hopes
+~/Github/hopes/hopes
 ```
 
 No `~/.config/hopes/config.toml` is required — the defaults already match.
@@ -85,10 +85,8 @@ normal (`~/hopes-data`) and use a config file to point `hopes` at it.
 # 1. Homebrew (skip if already installed)
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
-# 2. git, gh, Rust
-brew install git gh
-curl https://sh.rustup.rs -sSf | sh
-# restart Terminal, or: source "$HOME/.cargo/env"
+# 2. git, gh, Go
+brew install git gh go
 
 # 3. Authenticate GitHub CLI (offers to generate + upload an SSH key)
 gh auth login -p ssh
@@ -96,7 +94,7 @@ gh auth login -p ssh
 # 4. Build the app
 git clone git@github.com:AmaneKai/hopes.git ~/Github/hopes
 cd ~/Github/hopes
-cargo build --release
+go build -trimpath -ldflags "-s -w" .
 
 # 5. Clone the sync data
 git clone git@github.com:AmaneKai/hopes-data.git ~/hopes-data
@@ -114,13 +112,13 @@ pull_on_startup = true
 EOF
 
 # 7. Run it
-~/Github/hopes/target/release/hopes
+~/Github/hopes/hopes
 ```
 
 Optional: put `hopes` on your `PATH` so you can just type `hopes`:
 
 ```bash
-ln -s ~/Github/hopes/target/release/hopes /usr/local/bin/hopes
+ln -s ~/Github/hopes/hopes /usr/local/bin/hopes
 ```
 
 You should see your task list and a `☁ Synced` badge top-right.
