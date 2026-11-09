@@ -3,6 +3,7 @@ package storage
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/AmaneKai/hopes/internal/domain"
@@ -22,16 +23,20 @@ type ExecStore struct {
 }
 
 func NewExecStore(dir string, command []string) (*ExecStore, error) {
-	if len(command) == 0 {
+	if len(command) == 0 || strings.TrimSpace(command[0]) == "" {
 		return nil, errors.New("storage.command is required for the exec backend")
 	}
-	return &ExecStore{dir: dir, program: command[0], args: command[1:]}, nil
+	return &ExecStore{
+		dir:     dir,
+		program: command[0],
+		args:    slices.Clone(command[1:]),
+	}, nil
 }
 
 func (s *ExecStore) DataDir() string { return s.dir }
 
 func (s *ExecStore) run(verb string, input []byte) (proc.Result, error) {
-	args := append(append([]string{}, s.args...), verb)
+	args := append(slices.Clone(s.args), verb)
 	res, err := proc.Run(s.program, args, "", input, execOutputLimit, 0)
 	if err != nil {
 		return res, err

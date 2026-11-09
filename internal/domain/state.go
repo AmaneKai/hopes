@@ -2,7 +2,6 @@ package domain
 
 import (
 	"cmp"
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -12,11 +11,41 @@ import (
 	"github.com/AmaneKai/hopes/internal/gitsync"
 )
 
-func Snippet(text string, max int) string {
-	if utf8.RuneCountInString(text) <= max {
+func Snippet(text string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
+	if utf8.RuneCountInString(text) <= maxLen {
 		return text
 	}
-	return string([]rune(text)[:max]) + "..."
+	return string([]rune(text)[:maxLen]) + "..."
+}
+
+func enumAt[T ~int](v T, values []string) string {
+	if int(v) < 0 || int(v) >= len(values) {
+		return values[0]
+	}
+	return values[v]
+}
+
+func cycleEnum[T ~int](v T, count, delta int) T {
+	n := max(1, count)
+	return T(((int(v)+delta)%n + n) % n)
+}
+
+func marshalEnum[T ~int](v T, names []string) ([]byte, error) {
+	if int(v) < 0 || int(v) >= len(names) {
+		return nil, fmt.Errorf("invalid value %d", v)
+	}
+	return []byte(names[v]), nil
+}
+
+func unmarshalEnum[T ~int](b []byte, names []string, out *T) error {
+	if i := slices.Index(names, string(b)); i >= 0 {
+		*out = T(i)
+		return nil
+	}
+	return fmt.Errorf("unknown value %q", b)
 }
 
 type ViewMode int
@@ -28,11 +57,8 @@ const (
 
 var viewModeNames = [...]string{"Table", "Kanban"}
 
-func (v ViewMode) MarshalJSON() ([]byte, error) { return json.Marshal(viewModeNames[v]) }
-
-func (v *ViewMode) UnmarshalJSON(b []byte) error {
-	return unmarshalName(b, viewModeNames[:], (*int)(v))
-}
+func (v ViewMode) MarshalText() ([]byte, error)  { return marshalEnum(v, viewModeNames[:]) }
+func (v *ViewMode) UnmarshalText(b []byte) error { return unmarshalEnum(b, viewModeNames[:], v) }
 
 type FocusPane int
 
@@ -41,7 +67,12 @@ const (
 	FocusNav
 )
 
-func (f FocusPane) Other() FocusPane { return 1 - f }
+func (f FocusPane) Other() FocusPane {
+	if f == FocusMain {
+		return FocusNav
+	}
+	return FocusMain
+}
 
 type SortMode int
 
@@ -54,26 +85,10 @@ const (
 
 var sortModeNames = [...]string{"Natural", "Priority", "Status", "Title"}
 
-func (s SortMode) Next() SortMode { return (s + 1) % 4 }
-func (s SortMode) Label() string  { return sortModeNames[s] }
-
-func (s SortMode) MarshalJSON() ([]byte, error) { return json.Marshal(sortModeNames[s]) }
-
-func (s *SortMode) UnmarshalJSON(b []byte) error {
-	return unmarshalName(b, sortModeNames[:], (*int)(s))
-}
-
-func unmarshalName(b []byte, names []string, out *int) error {
-	var name string
-	if err := json.Unmarshal(b, &name); err != nil {
-		return err
-	}
-	if i := slices.Index(names, name); i >= 0 {
-		*out = i
-		return nil
-	}
-	return fmt.Errorf("unknown value %q", name)
-}
+func (s SortMode) Next() SortMode                { return cycleEnum(s, len(sortModeNames), 1) }
+func (s SortMode) Label() string                 { return enumAt(s, sortModeNames[:]) }
+func (s SortMode) MarshalText() ([]byte, error)  { return marshalEnum(s, sortModeNames[:]) }
+func (s *SortMode) UnmarshalText(b []byte) error { return unmarshalEnum(b, sortModeNames[:], s) }
 
 type WorkspaceSummary struct {
 	Name  string
@@ -116,7 +131,7 @@ type AppState struct {
 func NewAppState(items []Item, sync gitsync.Status) *AppState {
 	workspace := DefaultWorkspace
 	if len(items) > 0 {
-		workspace = items[0].Workspace
+		workspace = cmp.Or(items[0].Workspace, DefaultWorkspace)
 	}
 	s := &AppState{Items: items, Workspace: workspace, Selection: -1, SyncStatus: sync}
 	s.RefreshCache()
@@ -136,33 +151,29 @@ func (s *AppState) SelectedItem() *Item {
 }
 
 func (s *AppState) WorkspacePosition() int {
-	for i, w := range s.workspaces {
-		if w.Name == s.Workspace {
-			return i
-		}
-	}
-	return 0
+	return max(0, indexByName(s.workspaces, s.Workspace))
 }
 
 func (s *AppState) WorkspaceAtOffset(forward bool) (string, bool) {
-	n := len(s.workspaces)
-	if n < 2 {
+	if len(s.workspaces) < 2 {
 		return "", false
 	}
-	here := s.WorkspacePosition()
+	delta := -1
 	if forward {
-		return s.workspaces[(here+1)%n].Name, true
+		delta = 1
 	}
-	return s.workspaces[(here+n-1)%n].Name, true
+	next := cycleEnum(s.WorkspacePosition(), len(s.workspaces), delta)
+	return s.workspaces[next].Name, true
 }
 
 func (s *AppState) FindWorkspace(name string) (string, bool) {
-	for _, w := range s.workspaces {
-		if strings.EqualFold(w.Name, name) {
-			return w.Name, true
-		}
+	i := slices.IndexFunc(s.workspaces, func(w WorkspaceSummary) bool {
+		return strings.EqualFold(w.Name, name)
+	})
+	if i < 0 {
+		return "", false
 	}
-	return "", false
+	return s.workspaces[i].Name, true
 }
 
 func (s *AppState) SetStatus(msg string) {
@@ -186,17 +197,15 @@ func (s *AppState) refreshWorkspaces() {
 	var workspaces []WorkspaceSummary
 	var stats WorkspaceStats
 	for _, item := range s.Items {
-		open := 0
-		if item.Status != Complete {
-			open = 1
-		}
 		i := indexByName(workspaces, item.Workspace)
 		if i < 0 {
 			i = len(workspaces)
 			workspaces = append(workspaces, WorkspaceSummary{Name: item.Workspace})
 		}
 		workspaces[i].Total++
-		workspaces[i].Open += open
+		if item.Status != Complete {
+			workspaces[i].Open++
+		}
 		if item.Workspace == s.Workspace {
 			stats.Total++
 			switch item.Status {
@@ -267,6 +276,7 @@ func (s *AppState) isVisible(item Item) bool {
 func matchesQuery(item Item, filter string) bool {
 	query := strings.ToLower(strings.TrimSpace(filter))
 	fields := []string{item.Title, item.Description, item.Priority.Label(), item.Status.Label()}
-	matches := func(f string) bool { return strings.Contains(strings.ToLower(f), query) }
-	return slices.ContainsFunc(fields, matches)
+	return slices.ContainsFunc(fields, func(f string) bool {
+		return strings.Contains(strings.ToLower(f), query)
+	})
 }

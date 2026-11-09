@@ -31,7 +31,7 @@ Designed around workspaces, native Vim motions, and a quiet two-pane layout.
 
 ### Prerequisites
 
-- Go 1.26+
+- Go 1.27+
 
 ### Building from Source
 

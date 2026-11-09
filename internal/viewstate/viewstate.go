@@ -1,9 +1,10 @@
 package viewstate
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/AmaneKai/hopes/internal/domain"
 	"github.com/AmaneKai/hopes/internal/paths"
@@ -12,16 +13,22 @@ import (
 type ViewState struct {
 	ViewMode  domain.ViewMode `json:"view_mode"`
 	SortMode  domain.SortMode `json:"sort_mode"`
-	Workspace string          `json:"workspace,omitempty"`
+	Workspace string          `json:"workspace,omitzero"`
 }
 
 func path() string { return filepath.Join(paths.State(), "view.json") }
 
 func Capture(s *domain.AppState) ViewState {
+	if s == nil {
+		return ViewState{}
+	}
 	return ViewState{ViewMode: s.ViewMode, SortMode: s.SortMode, Workspace: s.Workspace}
 }
 
 func (v ViewState) Apply(s *domain.AppState) {
+	if s == nil {
+		return
+	}
 	s.ViewMode = v.ViewMode
 	s.SortMode = v.SortMode
 	if name, ok := s.FindWorkspace(v.Workspace); ok && hasTasks(s, name) {
@@ -31,12 +38,9 @@ func (v ViewState) Apply(s *domain.AppState) {
 }
 
 func hasTasks(s *domain.AppState, name string) bool {
-	for _, w := range s.Workspaces() {
-		if w.Name == name {
-			return w.Total > 0
-		}
-	}
-	return false
+	return slices.ContainsFunc(s.Workspaces(), func(w domain.WorkspaceSummary) bool {
+		return w.Name == name && w.Total > 0
+	})
 }
 
 func Load() (ViewState, bool) {
@@ -49,7 +53,9 @@ func Load() (ViewState, bool) {
 }
 
 func (v ViewState) Save() {
-	_ = os.MkdirAll(paths.State(), 0o755)
+	if err := os.MkdirAll(paths.State(), 0o755); err != nil {
+		return
+	}
 	if data, err := json.Marshal(v); err == nil {
 		_ = os.WriteFile(path(), data, 0o644)
 	}

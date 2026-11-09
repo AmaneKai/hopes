@@ -1,7 +1,5 @@
 package domain
 
-import "fmt"
-
 type Priority int
 
 const (
@@ -11,38 +9,26 @@ const (
 	Low
 )
 
-var AllPriorities = [...]Priority{Urgent, High, Medium, Low}
+var (
+	AllPriorities       = [...]Priority{Urgent, High, Medium, Low}
+	priorityLabels      = [...]string{"Urgent", "High", "Medium", "Low"}
+	priorityShortLabels = [...]string{"Urg", "High", "Med", "Low"}
+	priorityGlyphs      = [...]string{"▲", "▲", "◆", "▽"}
+)
 
-func (p Priority) Next() Priority { return (p + 1) % 4 }
-func (p Priority) Prev() Priority { return (p + 3) % 4 }
-
-func (p Priority) Label() string {
-	return [...]string{"Urgent", "High", "Medium", "Low"}[p]
-}
-
-func (p Priority) ShortLabel() string {
-	return [...]string{"Urg", "High", "Med", "Low"}[p]
-}
-
-func (p Priority) Glyph() string {
-	return [...]string{"▲", "▲", "◆", "▽"}[p]
-}
+func (p Priority) Next() Priority     { return cycleEnum(p, len(priorityLabels), 1) }
+func (p Priority) Prev() Priority     { return cycleEnum(p, len(priorityLabels), -1) }
+func (p Priority) Label() string      { return enumAt(p, priorityLabels[:]) }
+func (p Priority) ShortLabel() string { return enumAt(p, priorityShortLabels[:]) }
+func (p Priority) Glyph() string      { return enumAt(p, priorityGlyphs[:]) }
 
 func PriorityFromDigit(r rune) (Priority, bool) {
-	if r < '1' || r > '4' {
+	idx := int(r - '1')
+	if idx < 0 || idx >= len(AllPriorities) {
 		return 0, false
 	}
-	return Priority(r - '1'), true
+	return AllPriorities[idx], true
 }
 
-func (p Priority) MarshalText() ([]byte, error) { return []byte(p.Label()), nil }
-
-func (p *Priority) UnmarshalText(b []byte) error {
-	for _, q := range AllPriorities {
-		if q.Label() == string(b) {
-			*p = q
-			return nil
-		}
-	}
-	return fmt.Errorf("unknown priority %q", b)
-}
+func (p Priority) MarshalText() ([]byte, error)  { return marshalEnum(p, priorityLabels[:]) }
+func (p *Priority) UnmarshalText(b []byte) error { return unmarshalEnum(b, priorityLabels[:], p) }

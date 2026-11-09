@@ -1,7 +1,8 @@
 package domain
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"strings"
 )
@@ -17,46 +18,44 @@ type Item struct {
 }
 
 func NewItem(title, workspace string) Item {
-	return Item{Title: title, Priority: Medium, Status: Todo, Workspace: workspace}
+	return Item{
+		Title:     title,
+		Priority:  Medium,
+		Status:    Todo,
+		Workspace: firstTrimmed(workspace),
+	}
 }
 
-type storedItem struct {
-	Title       *string   `json:"title"`
-	Description string    `json:"description"`
-	Priority    *Priority `json:"priority"`
-	Status      *Status   `json:"status"`
-	Workspace   *string   `json:"workspace"`
-	Tags        []string  `json:"tags"`
-}
-
-func (it *Item) UnmarshalJSON(data []byte) error {
-	var s storedItem
-	if err := json.Unmarshal(data, &s); err != nil {
+func (it *Item) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	var raw struct {
+		Title       *string   `json:"title"`
+		Description string    `json:"description"`
+		Priority    *Priority `json:"priority"`
+		Status      *Status   `json:"status"`
+		Workspace   string    `json:"workspace"`
+		Tags        []string  `json:"tags"`
+	}
+	if err := json.UnmarshalDecode(dec, &raw); err != nil {
 		return err
 	}
-	switch {
-	case s.Title == nil:
-		return errors.New("task is missing a title")
-	case s.Priority == nil:
-		return errors.New("task is missing a priority")
-	case s.Status == nil:
-		return errors.New("task is missing a status")
-	}
-	workspace := ""
-	if s.Workspace != nil {
-		workspace = strings.TrimSpace(*s.Workspace)
-	} else if len(s.Tags) > 0 {
-		workspace = strings.TrimSpace(s.Tags[0])
-	}
-	if workspace == "" {
-		workspace = DefaultWorkspace
+	if raw.Title == nil || raw.Priority == nil || raw.Status == nil {
+		return errors.New("task is missing required fields")
 	}
 	*it = Item{
-		Title:       *s.Title,
-		Description: s.Description,
-		Priority:    *s.Priority,
-		Status:      *s.Status,
-		Workspace:   workspace,
+		Title:       *raw.Title,
+		Description: raw.Description,
+		Priority:    *raw.Priority,
+		Status:      *raw.Status,
+		Workspace:   firstTrimmed(append([]string{raw.Workspace}, raw.Tags...)...),
 	}
 	return nil
+}
+
+func firstTrimmed(values ...string) string {
+	for _, v := range values {
+		if v = strings.TrimSpace(v); v != "" {
+			return v
+		}
+	}
+	return DefaultWorkspace
 }

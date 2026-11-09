@@ -1,7 +1,5 @@
 package domain
 
-import "fmt"
-
 type Status int
 
 const (
@@ -10,42 +8,27 @@ const (
 	Complete
 )
 
-var AllStatuses = [...]Status{Todo, InProgress, Complete}
+var (
+	AllStatuses       = [...]Status{Todo, InProgress, Complete}
+	statusNames       = [...]string{"Todo", "InProgress", "Complete"}
+	statusLabels      = [...]string{"To Do", "In Progress", "Done"}
+	statusBoardLabels = [...]string{"To Do", "In Progress", "Completed"}
+	statusGlyphs      = [...]string{"○", "◐", "✓"}
+)
 
-func (s Status) Next() Status { return (s + 1) % 3 }
-func (s Status) Prev() Status { return (s + 2) % 3 }
-
-func (s Status) Column() int { return int(s) }
+func (s Status) Next() Status       { return cycleEnum(s, len(statusNames), 1) }
+func (s Status) Prev() Status       { return cycleEnum(s, len(statusNames), -1) }
+func (s Status) Column() int        { return max(0, min(int(s), len(AllStatuses)-1)) }
+func (s Status) Label() string      { return enumAt(s, statusLabels[:]) }
+func (s Status) BoardLabel() string { return enumAt(s, statusBoardLabels[:]) }
+func (s Status) Glyph() string      { return enumAt(s, statusGlyphs[:]) }
 
 func StatusFromColumn(col int) Status {
-	if col < 0 || col > 2 {
+	if col < 0 || col >= len(AllStatuses) {
 		return Complete
 	}
-	return Status(col)
+	return AllStatuses[col]
 }
 
-func (s Status) Label() string {
-	return [...]string{"To Do", "In Progress", "Done"}[s]
-}
-
-func (s Status) BoardLabel() string {
-	return [...]string{"To Do", "In Progress", "Completed"}[s]
-}
-
-func (s Status) Glyph() string {
-	return [...]string{"○", "◐", "✓"}[s]
-}
-
-var statusNames = [...]string{"Todo", "InProgress", "Complete"}
-
-func (s Status) MarshalText() ([]byte, error) { return []byte(statusNames[s]), nil }
-
-func (s *Status) UnmarshalText(b []byte) error {
-	for i, name := range statusNames {
-		if name == string(b) {
-			*s = Status(i)
-			return nil
-		}
-	}
-	return fmt.Errorf("unknown status %q", b)
-}
+func (s Status) MarshalText() ([]byte, error)  { return marshalEnum(s, statusNames[:]) }
+func (s *Status) UnmarshalText(b []byte) error { return unmarshalEnum(b, statusNames[:], s) }

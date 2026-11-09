@@ -1,6 +1,7 @@
 package paths
 
 import (
+	"cmp"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -19,11 +20,8 @@ func xdg(env, fallback string) string {
 }
 
 func Config() string {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		dir = "."
-	}
-	return filepath.Join(dir, "hopes")
+	dir, _ := os.UserConfigDir()
+	return filepath.Join(cmp.Or(dir, "."), "hopes")
 }
 
 func dataLocal() string {
@@ -31,10 +29,7 @@ func dataLocal() string {
 	case "darwin":
 		return filepath.Join(home(), "Library", "Application Support")
 	case "windows":
-		if dir := os.Getenv("LOCALAPPDATA"); dir != "" {
-			return dir
-		}
-		return "."
+		return cmp.Or(os.Getenv("LOCALAPPDATA"), ".")
 	default:
 		return xdg("XDG_DATA_HOME", filepath.Join(".local", "share"))
 	}

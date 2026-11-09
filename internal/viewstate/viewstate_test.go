@@ -1,7 +1,7 @@
 package viewstate
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"testing"
 
 	"github.com/AmaneKai/hopes/internal/domain"

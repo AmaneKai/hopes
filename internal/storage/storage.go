@@ -1,8 +1,9 @@
 package storage
 
 import (
-	"bytes"
-	"encoding/json"
+	"cmp"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"strings"
@@ -19,23 +20,15 @@ type Storage interface {
 }
 
 func Open(cfg config.Storage, fallbackDir string) (Storage, error) {
-	dir := firstNonEmpty(cfg.Dir, fallbackDir, paths.Data())
+	dir := cmp.Or(cfg.Dir, fallbackDir, paths.Data())
 	switch cfg.Backend {
 	case config.BackendExec:
 		return NewExecStore(dir, cfg.Command)
 	case config.BackendJSON:
 		return NewJSONStore(dir), nil
+	default:
+		return nil, fmt.Errorf("unknown storage backend %q", cfg.Backend)
 	}
-	return nil, fmt.Errorf("unknown storage backend %q", cfg.Backend)
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 func decodeItems(text string) ([]domain.Item, error) {
@@ -53,15 +46,8 @@ func decodeItems(text string) ([]domain.Item, error) {
 }
 
 func encodeItems(items []domain.Item, indent string) ([]byte, error) {
-	if items == nil {
-		items = []domain.Item{}
+	if indent != "" {
+		return json.Marshal(items, jsontext.WithIndent(indent))
 	}
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	enc.SetIndent("", indent)
-	if err := enc.Encode(items); err != nil {
-		return nil, err
-	}
-	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+	return json.Marshal(items)
 }

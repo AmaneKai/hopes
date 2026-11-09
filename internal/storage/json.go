@@ -37,11 +37,20 @@ func (s *JSONStore) Save(items []domain.Item) error {
 	if err != nil {
 		return err
 	}
-	tmp := filepath.Join(filepath.Dir(s.path), "items.tmp")
-	if err := writeSynced(tmp, data); err != nil {
+	dir := filepath.Dir(s.path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path)
+	tmp := filepath.Join(dir, "items.tmp")
+	if err := writeSynced(tmp, data); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, s.path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 func writeSynced(path string, data []byte) error {
@@ -50,11 +59,11 @@ func writeSynced(path string, data []byte) error {
 		return err
 	}
 	if _, err := f.Write(data); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	if err := f.Sync(); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	return f.Close()
