@@ -15,10 +15,14 @@ func Snippet(text string, maxLen int) string {
 	if maxLen <= 0 {
 		return ""
 	}
-	if utf8.RuneCountInString(text) <= maxLen {
-		return text
+	count := 0
+	for i := range text {
+		if count == maxLen {
+			return text[:i] + "..."
+		}
+		count++
 	}
-	return string([]rune(text)[:maxLen]) + "..."
+	return text
 }
 
 func enumAt[T ~int](v T, values []string) string {
@@ -196,10 +200,12 @@ func (s *AppState) RefreshCache() {
 func (s *AppState) refreshWorkspaces() {
 	var workspaces []WorkspaceSummary
 	var stats WorkspaceStats
+	position := make(map[string]int)
 	for _, item := range s.Items {
-		i := indexByName(workspaces, item.Workspace)
-		if i < 0 {
+		i, ok := position[item.Workspace]
+		if !ok {
 			i = len(workspaces)
+			position[item.Workspace] = i
 			workspaces = append(workspaces, WorkspaceSummary{Name: item.Workspace})
 		}
 		workspaces[i].Total++
@@ -218,7 +224,7 @@ func (s *AppState) refreshWorkspaces() {
 			}
 		}
 	}
-	if indexByName(workspaces, s.Workspace) < 0 {
+	if _, ok := position[s.Workspace]; !ok {
 		workspaces = append(workspaces, WorkspaceSummary{Name: s.Workspace})
 	}
 	if stats.Total > 0 {
@@ -230,12 +236,18 @@ func (s *AppState) refreshWorkspaces() {
 
 func (s *AppState) refreshVisible() {
 	indices := []int{}
-	for i, item := range s.Items {
-		if s.isVisible(item) {
-			indices = append(indices, i)
+	query := strings.ToLower(strings.TrimSpace(s.Filter))
+	for i := range s.Items {
+		item := &s.Items[i]
+		if item.Workspace != s.Workspace {
+			continue
 		}
+		if s.HasFilter && !matchesQuery(item, query) {
+			continue
+		}
+		indices = append(indices, i)
 	}
-	if order := s.order(); order != nil {
+	if order := s.order(indices); order != nil {
 		slices.SortStableFunc(indices, order)
 	}
 	var columns [3][]int
@@ -247,7 +259,7 @@ func (s *AppState) refreshVisible() {
 	s.filtered = indices
 }
 
-func (s *AppState) order() func(a, b int) int {
+func (s *AppState) order(visible []int) func(a, b int) int {
 	items := s.Items
 	switch s.SortMode {
 	case SortPriority:
@@ -255,28 +267,60 @@ func (s *AppState) order() func(a, b int) int {
 	case SortStatus:
 		return func(a, b int) int { return cmp.Compare(items[a].Status, items[b].Status) }
 	case SortTitle:
-		return func(a, b int) int { return cmp.Compare(lowerTitle(items[a]), lowerTitle(items[b])) }
+		keys := make([]string, len(items))
+		for _, i := range visible {
+			keys[i] = strings.ToLower(items[i].Title)
+		}
+		return func(a, b int) int { return cmp.Compare(keys[a], keys[b]) }
 	}
 	return nil
 }
-
-func lowerTitle(it Item) string { return strings.ToLower(it.Title) }
 
 func indexByName(workspaces []WorkspaceSummary, name string) int {
 	return slices.IndexFunc(workspaces, func(w WorkspaceSummary) bool { return w.Name == name })
 }
 
-func (s *AppState) isVisible(item Item) bool {
-	if item.Workspace != s.Workspace {
-		return false
-	}
-	return !s.HasFilter || matchesQuery(item, s.Filter)
+func matchesQuery(item *Item, query string) bool {
+	return containsFold(item.Title, query) || containsFold(item.Description, query) ||
+		containsFold(item.Priority.Label(), query) || containsFold(item.Status.Label(), query)
 }
 
-func matchesQuery(item Item, filter string) bool {
-	query := strings.ToLower(strings.TrimSpace(filter))
-	fields := []string{item.Title, item.Description, item.Priority.Label(), item.Status.Label()}
-	return slices.ContainsFunc(fields, func(f string) bool {
-		return strings.Contains(strings.ToLower(f), query)
-	})
+func containsFold(s, lowerSub string) bool {
+	if lowerSub == "" {
+		return true
+	}
+	if !isASCII(s) || !isASCII(lowerSub) {
+		return strings.Contains(strings.ToLower(s), lowerSub)
+	}
+	for start := 0; start+len(lowerSub) <= len(s); start++ {
+		if hasFoldedPrefix(s[start:], lowerSub) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasFoldedPrefix(s, lowerPrefix string) bool {
+	for i := 0; i < len(lowerPrefix); i++ {
+		if asciiLower(s[i]) != lowerPrefix[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func asciiLower(c byte) byte {
+	if 'A' <= c && c <= 'Z' {
+		return c + 'a' - 'A'
+	}
+	return c
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
 }

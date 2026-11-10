@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"time"
 )
@@ -34,6 +35,13 @@ func (c *capped) Write(p []byte) (int, error) {
 func Run(
 	name string, args []string, dir string, input []byte, limit int, timeout time.Duration,
 ) (Result, error) {
+	return RunEnv(name, args, dir, nil, input, limit, timeout)
+}
+
+func RunEnv(
+	name string, args []string, dir string, env []string, input []byte, limit int,
+	timeout time.Duration,
+) (Result, error) {
 	ctx := context.Background()
 	if timeout > 0 {
 		var cancel context.CancelFunc
@@ -42,6 +50,9 @@ func Run(
 	}
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	cmd.WaitDelay = pipeGrace
 	if input != nil {
 		cmd.Stdin = bytes.NewReader(input)

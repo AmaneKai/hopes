@@ -1,15 +1,19 @@
 package domain
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"strings"
 )
 
 const DefaultWorkspace = "Inbox"
 
 type Item struct {
+	ID          string   `json:"id,omitempty"`
 	Title       string   `json:"title"`
 	Description string   `json:"description"`
 	Priority    Priority `json:"priority"`
@@ -19,6 +23,7 @@ type Item struct {
 
 func NewItem(title, workspace string) Item {
 	return Item{
+		ID:        NewID(),
 		Title:     title,
 		Priority:  Medium,
 		Status:    Todo,
@@ -28,6 +33,7 @@ func NewItem(title, workspace string) Item {
 
 func (it *Item) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	var raw struct {
+		ID          string    `json:"id"`
 		Title       *string   `json:"title"`
 		Description string    `json:"description"`
 		Priority    *Priority `json:"priority"`
@@ -42,6 +48,7 @@ func (it *Item) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 		return errors.New("task is missing required fields")
 	}
 	*it = Item{
+		ID:          raw.ID,
 		Title:       *raw.Title,
 		Description: raw.Description,
 		Priority:    *raw.Priority,
@@ -58,4 +65,30 @@ func firstTrimmed(values ...string) string {
 		}
 	}
 	return DefaultWorkspace
+}
+
+func NewID() string {
+	raw := make([]byte, 8)
+	_, _ = rand.Read(raw)
+	return hex.EncodeToString(raw)
+}
+
+func AssignMissingIDs(items []Item) {
+	seen := map[string]int{}
+	for i := range items {
+		if items[i].ID != "" {
+			continue
+		}
+		key := items[i].Workspace + "\x00" + items[i].Title
+		items[i].ID = fmt.Sprintf("legacy-%x-%d", fnv1a(key), seen[key])
+		seen[key]++
+	}
+}
+
+func fnv1a(s string) uint64 {
+	hash := uint64(14695981039346656037)
+	for i := 0; i < len(s); i++ {
+		hash = (hash ^ uint64(s[i])) * 1099511628211
+	}
+	return hash
 }

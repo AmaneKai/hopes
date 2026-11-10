@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -84,5 +85,28 @@ func TestExecStoreRoundTripsThroughAHelper(t *testing.T) {
 func TestExecStoreNeedsACommand(t *testing.T) {
 	if _, err := NewExecStore(t.TempDir(), nil); err == nil {
 		t.Fatal("expected an error")
+	}
+}
+
+func TestJSONStoreRefusesToOverwriteExternalChanges(t *testing.T) {
+	dir := t.TempDir()
+	a, b := NewJSONStore(dir), NewJSONStore(dir)
+	if _, err := a.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Save([]domain.Item{domain.NewItem("from a", "")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Save([]domain.Item{domain.NewItem("from b", "")}); !errors.Is(err, ErrChangedOnDisk) {
+		t.Fatalf("got %v, want ErrChangedOnDisk", err)
+	}
+	if _, err := b.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Save([]domain.Item{domain.NewItem("from b", "")}); err != nil {
+		t.Fatalf("save after reload: %v", err)
 	}
 }

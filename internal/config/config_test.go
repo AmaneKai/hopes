@@ -1,10 +1,13 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/AmaneKai/hopes/internal/paths"
 	"github.com/AmaneKai/hopes/internal/textfile"
 )
 
@@ -71,5 +74,30 @@ func TestToleratesBOMAndCRLF(t *testing.T) {
 	c, err := Parse(textfile.Normalize([]byte("\xEF\xBB\xBF[sync]\r\nenabled = false\r\n")))
 	if err != nil || c.Sync.Enabled {
 		t.Fatalf("got %+v %v", c, err)
+	}
+}
+
+func TestLoadSurfacesBrokenConfigInsteadOfSilentDefaults(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("HOME", dir)
+	t.Setenv("AppData", dir)
+	location := filepath.Join(paths.Config(), "config.toml")
+	if err := os.MkdirAll(filepath.Dir(location), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(location, []byte("[sync\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(); err == nil {
+		t.Fatal("expected a parse error for a broken config file")
+	}
+}
+
+func TestUnknownKeysProduceWarningsNotErrors(t *testing.T) {
+	c, err := Parse("typo = 1\n[sync]\ndebounce_secs = 3\n[other]\nx = 1\n")
+	want := []string{"unknown key other.x", "unknown key sync.debounce_secs", "unknown key typo"}
+	if err != nil || !slices.Equal(c.Warnings, want) {
+		t.Fatalf("got %v, %v", c.Warnings, err)
 	}
 }

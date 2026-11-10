@@ -1,12 +1,15 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 
 	"github.com/AmaneKai/hopes/internal/domain"
 	"github.com/AmaneKai/hopes/internal/gitsync"
+	"github.com/AmaneKai/hopes/internal/storage"
 )
 
 func (a *App) focusNav()  { a.State.Focus = domain.FocusNav }
@@ -88,11 +91,43 @@ func (a *App) persist() error {
 	if a.loadErr != nil {
 		return fmt.Errorf("not saved, tasks failed to load: %v", a.loadErr)
 	}
-	if err := a.store.Save(a.State.Items); err != nil {
+	err := a.store.Save(a.State.Items)
+	if errors.Is(err, storage.ErrChangedOnDisk) {
+		err = a.mergeWithDisk()
+	}
+	if err != nil {
 		return fmt.Errorf("save failed: %v", err)
 	}
+	a.saved = domain.CloneItems(a.State.Items)
 	a.sync.RequestPush()
 	return nil
+}
+
+func (a *App) mergeWithDisk() error {
+	theirs, err := a.store.Load()
+	if err != nil {
+		return err
+	}
+	a.State.Items = domain.Merge(a.saved, a.State.Items, theirs)
+	return a.store.Save(a.State.Items)
+}
+
+func (a *App) mergeAfterConflict(backup string) {
+	mine, err := storage.ReadItemsFile(backup)
+	if err != nil {
+		a.State.SetStatus("Sync conflict — could not read local backup " + backup)
+		return
+	}
+	base, _ := storage.ReadItemsFile(gitsync.BasePathFor(backup))
+	theirs, err := a.store.Load()
+	if err != nil {
+		a.State.SetStatus("Sync conflict — could not read remote tasks: " + err.Error())
+		return
+	}
+	a.State.Items = domain.Merge(base, mine, theirs)
+	a.saved = theirs
+	a.commit("Sync conflict merged with remote — backup kept at " + backup)
+	_ = os.Remove(gitsync.BasePathFor(backup))
 }
 
 func (a *App) commit(status string) {
@@ -228,8 +263,7 @@ func (a *App) ApplySyncStatus(status gitsync.Status) {
 	case gitsync.Offline:
 		a.State.SetStatus("Offline — will sync when connection returns")
 	case gitsync.Conflict:
-		a.reloadFromDisk()
-		a.State.SetStatus("Sync conflict — local backup saved to " + status.Detail)
+		a.mergeAfterConflict(status.Detail)
 	case gitsync.Failed:
 		a.State.SetStatus("Sync error: " + status.Detail)
 	}
@@ -243,5 +277,6 @@ func (a *App) reloadFromDisk() {
 	}
 	a.loadErr = nil
 	a.State.Items = items
+	a.saved = domain.CloneItems(items)
 	a.refresh()
 }

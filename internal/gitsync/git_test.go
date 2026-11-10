@@ -167,6 +167,7 @@ func TestRapidEditsCollapseIntoASingleCommit(t *testing.T) {
 	work := clone(t, remote)
 	before := commits(t, remote)
 	engine := spawn(work, 300*time.Millisecond)
+	defer engine.Shutdown()
 	for i := range 5 {
 		writeItems(t, work, `[{"title":"edit-`+strconv.Itoa(i)+`"}]`)
 		engine.RequestPush()
@@ -197,7 +198,8 @@ func TestEnginePushesLeftoverChangesOnStartup(t *testing.T) {
 	work := clone(t, remote)
 	before := commits(t, remote)
 	writeItems(t, work, `[{"title":"left-behind"}]`)
-	spawn(work, 100*time.Millisecond)
+	engine := spawn(work, 100*time.Millisecond)
+	defer engine.Shutdown()
 	waitFor(t, "the leftover push", func() bool { return commits(t, remote) > before })
 }
 

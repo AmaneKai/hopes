@@ -1,34 +1,45 @@
 package storage
 
 import (
+	"bytes"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/AmaneKai/hopes/internal/domain"
 	"github.com/AmaneKai/hopes/internal/textfile"
 )
 
+var ErrChangedOnDisk = errors.New("tasks changed on disk since they were loaded")
+
 type JSONStore struct {
 	path string
+
+	mu    sync.Mutex
+	known []byte
+	seen  bool
 }
 
 func NewJSONStore(dir string) *JSONStore {
-	_ = os.MkdirAll(dir, 0o755)
 	return &JSONStore{path: filepath.Join(dir, "items.json")}
 }
 
 func (s *JSONStore) DataDir() string { return filepath.Dir(s.path) }
 
 func (s *JSONStore) Load() ([]domain.Item, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	data, err := os.ReadFile(s.path)
 	if errors.Is(err, fs.ErrNotExist) {
+		s.known, s.seen = nil, true
 		return []domain.Item{}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	s.known, s.seen = data, true
 	return decodeItems(textfile.Normalize(data))
 }
 
@@ -37,34 +48,20 @@ func (s *JSONStore) Save(items []domain.Item) error {
 	if err != nil {
 		return err
 	}
-	dir := filepath.Dir(s.path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.seen {
+		current, err := os.ReadFile(s.path)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		if !bytes.Equal(current, s.known) {
+			return ErrChangedOnDisk
+		}
+	}
+	if err := textfile.WriteAtomic(s.path, data); err != nil {
 		return err
 	}
-	tmp := filepath.Join(dir, "items.tmp")
-	if err := writeSynced(tmp, data); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
+	s.known, s.seen = data, true
 	return nil
-}
-
-func writeSynced(path string, data []byte) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		return err
-	}
-	return f.Close()
 }

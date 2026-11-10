@@ -8,6 +8,7 @@ import (
 
 	"github.com/AmaneKai/hopes/internal/domain"
 	"github.com/AmaneKai/hopes/internal/paths"
+	"github.com/AmaneKai/hopes/internal/textfile"
 )
 
 type ViewState struct {
@@ -53,10 +54,9 @@ func Load() (ViewState, bool) {
 }
 
 func (v ViewState) Save() {
-	if err := os.MkdirAll(paths.State(), 0o755); err != nil {
+	data, err := json.Marshal(v)
+	if err != nil {
 		return
 	}
-	if data, err := json.Marshal(v); err == nil {
-		_ = os.WriteFile(path(), data, 0o644)
-	}
+	_ = textfile.WriteAtomic(path(), data)
 }

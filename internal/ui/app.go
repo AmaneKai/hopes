@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/AmaneKai/hopes/internal/domain"
 	"github.com/AmaneKai/hopes/internal/gitsync"
@@ -27,6 +28,7 @@ type App struct {
 	store   storage.Storage
 	sync    *gitsync.Engine
 	loadErr error
+	saved   []domain.Item
 
 	table   *tableView
 	board   *boardView
@@ -47,6 +49,7 @@ func New(store storage.Storage, engine *gitsync.Engine) *App {
 		store:   store,
 		sync:    engine,
 		loadErr: loadErr,
+		saved:   domain.CloneItems(items),
 		table:   newTableView(len(items) > 0),
 		board:   &boardView{},
 		nav:     &sidebar{},
@@ -58,6 +61,12 @@ func New(store storage.Storage, engine *gitsync.Engine) *App {
 		a.State.SetStatus(fmt.Sprintf("Could not load tasks (%v) — saving is disabled", loadErr))
 	}
 	return a
+}
+
+func (a *App) Warn(messages ...string) {
+	if len(messages) > 0 {
+		a.State.SetStatus("Config: " + strings.Join(messages, "; "))
+	}
 }
 
 func (a *App) RestoreView(v viewstate.ViewState) { v.Apply(a.State) }

@@ -3,6 +3,8 @@ package textedit
 import (
 	"slices"
 	"unicode"
+
+	"github.com/clipperhouse/displaywidth"
 )
 
 func isWord(c rune) bool { return !unicode.IsSpace(c) }
@@ -206,8 +208,9 @@ func Backspace(s *string, cursor int) int {
 	if at <= 0 {
 		return 0
 	}
-	*s = string(slices.Delete(cs, at-1, at))
-	return at - 1
+	start := at - lastGraphemeLen(cs[:at])
+	*s = string(slices.Delete(cs, start, at))
+	return start
 }
 
 func DeleteChar(s *string, cursor int) int {
@@ -218,7 +221,7 @@ func DeleteChar(s *string, cursor int) int {
 	cursor = clampTo(cursor, len(cs))
 	start, end := lineBounds(cs, cursor)
 	if end > start {
-		*s = string(slices.Delete(cs, cursor, cursor+1))
+		*s = string(slices.Delete(cs, cursor, cursor+firstGraphemeLen(cs[cursor:end])))
 	}
 	return ClampNormal(*s, cursor)
 }
@@ -328,4 +331,35 @@ func PasteBefore(s *string, cursor int, text string) int {
 	at := min(cursor, Len(*s))
 	InsertText(s, at, text)
 	return ClampNormal(*s, at+max(Len(text)-1, 0))
+}
+
+func DeleteWordBack(s *string, cursor int) int {
+	cs := []rune(*s)
+	end := max(0, min(cursor, len(cs)))
+	start := end
+	for start > 0 && unicode.IsSpace(cs[start-1]) {
+		start--
+	}
+	for start > 0 && isWord(cs[start-1]) {
+		start--
+	}
+	*s = string(slices.Delete(cs, start, end))
+	return start
+}
+
+func firstGraphemeLen(cs []rune) int {
+	graphemes := displaywidth.StringGraphemes(string(cs))
+	if !graphemes.Next() {
+		return 1
+	}
+	return Len(graphemes.Value())
+}
+
+func lastGraphemeLen(cs []rune) int {
+	graphemes := displaywidth.StringGraphemes(string(cs))
+	last := 1
+	for graphemes.Next() {
+		last = Len(graphemes.Value())
+	}
+	return last
 }

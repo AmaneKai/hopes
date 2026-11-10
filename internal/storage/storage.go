@@ -42,6 +42,7 @@ func decodeItems(text string) ([]domain.Item, error) {
 	if items == nil {
 		return nil, errors.New("tasks file holds null instead of a list")
 	}
+	domain.AssignMissingIDs(items)
 	return items, nil
 }
 

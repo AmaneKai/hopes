@@ -136,3 +136,29 @@ func TestVisualSelectionYankDeletePaste(t *testing.T) {
 	eq(t, PasteAfter(&s, 1, ""), 1)
 	eq(t, s, "abc")
 }
+
+func TestDeleteWordBackWorksAtTheCursorNotTheEnd(t *testing.T) {
+	text := "alpha beta gamma"
+	cursor := DeleteWordBack(&text, 10)
+	if text != "alpha  gamma" || cursor != 6 {
+		t.Fatalf("got %q cursor %d", text, cursor)
+	}
+}
+
+func TestBackspaceAndDeleteRemoveWholeGraphemes(t *testing.T) {
+	family := "👨‍👩‍👧"
+	text := "a" + family + "e\u0301"
+	cursor := Backspace(&text, Len(text))
+	if text != "a"+family || cursor != Len(text) {
+		t.Fatalf("combining accent: got %q cursor %d", text, cursor)
+	}
+	cursor = Backspace(&text, Len(text))
+	if text != "a" || cursor != 1 {
+		t.Fatalf("zwj sequence: got %q cursor %d", text, cursor)
+	}
+	text = family + "b"
+	DeleteChar(&text, 0)
+	if text != "b" {
+		t.Fatalf("delete at cursor: got %q", text)
+	}
+}

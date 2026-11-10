@@ -13,10 +13,37 @@ import (
 	"github.com/AmaneKai/hopes/internal/viewstate"
 )
 
+var version = "dev"
+
+const usage = `hopes - a terminal task board
+
+Usage:
+  hopes             start the app
+  hopes --version   print the version
+  hopes --help      show this help
+`
+
 func main() {
+	if len(os.Args) == 2 {
+		switch os.Args[1] {
+		case "-h", "--help", "help":
+			fmt.Print(usage)
+			return
+		case "-v", "--version", "version":
+			fmt.Println("hopes", version)
+			return
+		}
+	}
 	if len(os.Args) == 5 && os.Args[1] == gitsync.FlushArg {
-		gitsync.Flush(os.Args[2], os.Args[3], os.Args[4])
+		if st := gitsync.Flush(os.Args[2], os.Args[3], os.Args[4]); st.Kind == gitsync.Failed {
+			fmt.Fprintln(os.Stderr, "hopes: sync:", st.Detail)
+			os.Exit(1)
+		}
 		return
+	}
+	if len(os.Args) > 1 {
+		fmt.Fprintf(os.Stderr, "hopes: unknown argument %q\n\n%s", os.Args[1], usage)
+		os.Exit(2)
 	}
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "hopes:", err)
@@ -25,7 +52,10 @@ func main() {
 }
 
 func run() error {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
 	store, err := storage.Open(cfg.Storage, cfg.Sync.DataDir)
 	if err != nil {
 		return err
@@ -39,6 +69,7 @@ func run() error {
 		Enabled:       cfg.Sync.Enabled && cfg.Storage.Backend == config.BackendJSON,
 	})
 	app := ui.New(store, engine)
+	app.Warn(cfg.Warnings...)
 	if view, ok := viewstate.Load(); ok {
 		app.RestoreView(view)
 	}

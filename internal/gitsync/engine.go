@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -35,8 +36,9 @@ type request int
 const (
 	schedulePush request = iota
 	forceSync
-	shutdown
 )
+
+const shutdownWait = 30 * time.Second
 
 type Engine struct {
 	Enabled  bool
@@ -46,6 +48,9 @@ type Engine struct {
 	remote   string
 	branch   string
 	dirty    atomic.Bool
+	done     chan struct{}
+	finished chan struct{}
+	stopOnce sync.Once
 }
 
 type Options struct {
@@ -61,6 +66,8 @@ func Spawn(o Options) *Engine {
 	e := &Engine{
 		requests: make(chan request, 64),
 		statuses: make(chan Status, 256),
+		done:     make(chan struct{}),
+		finished: make(chan struct{}),
 		dir:      o.Dir,
 		remote:   o.Remote,
 		branch:   o.Branch,
@@ -80,13 +87,20 @@ func (e *Engine) Statuses() <-chan Status { return e.statuses }
 func (e *Engine) RequestPush() {
 	if e.Enabled {
 		e.dirty.Store(true)
-		e.requests <- schedulePush
+		e.enqueue(schedulePush)
 	}
 }
 
 func (e *Engine) ForceSync() {
 	if e.Enabled {
-		e.requests <- forceSync
+		e.enqueue(forceSync)
+	}
+}
+
+func (e *Engine) enqueue(r request) {
+	select {
+	case e.requests <- r:
+	default:
 	}
 }
 
@@ -94,7 +108,12 @@ func (e *Engine) Shutdown() {
 	if !e.Enabled {
 		return
 	}
-	e.requests <- shutdown
+	e.stopOnce.Do(func() { close(e.done) })
+	select {
+	case <-e.finished:
+	case <-time.After(shutdownWait):
+		return
+	}
 	if !e.dirty.Load() {
 		return
 	}
@@ -107,10 +126,19 @@ func (e *Engine) Shutdown() {
 	_ = cmd.Start()
 }
 
-func Flush(dir, remote, branch string) {
+func Flush(dir, remote, branch string) Status {
 	e := &Engine{statuses: make(chan Status, 64), dir: dir, remote: remote, branch: branch}
 	w := &worker{engine: e}
 	w.push()
+	last := Status{Kind: Idle}
+	for {
+		select {
+		case st := <-e.statuses:
+			last = st
+		default:
+			return last
+		}
+	}
 }
 
 type worker struct {
@@ -140,6 +168,7 @@ func (w *worker) reportErr(err error) {
 }
 
 func (w *worker) loop(pullOnStartup bool) {
+	defer close(w.engine.finished)
 	if pullOnStartup {
 		w.pull()
 	} else {
@@ -153,10 +182,9 @@ func (w *worker) loop(pullOnStartup bool) {
 	}
 	for {
 		select {
+		case <-e.done:
+			return
 		case req := <-e.requests:
-			if req == shutdown {
-				return
-			}
 			deadline = w.handle(req)
 		case <-deadline:
 			deadline = w.retryLater(w.push())
@@ -179,7 +207,22 @@ func (w *worker) retryLater(retry bool) <-chan time.Time {
 	return nil
 }
 
+func (w *worker) withRepoLock(action func()) (acquired bool) {
+	unlock, err := Lock(w.engine.dir)
+	if err != nil {
+		w.report(Failed, err.Error())
+		return false
+	}
+	defer unlock()
+	action()
+	return true
+}
+
 func (w *worker) pull() {
+	w.withRepoLock(w.pullLocked)
+}
+
+func (w *worker) pullLocked() {
 	e := w.engine
 	w.report(Syncing, "Pulling...")
 	if err := PullRebase(e.dir, e.remote, e.branch); err != nil {
@@ -199,7 +242,12 @@ func (w *worker) resolveConflict() {
 	w.report(Conflict, backup)
 }
 
-func (w *worker) push() bool {
+func (w *worker) push() (retry bool) {
+	acquired := w.withRepoLock(func() { retry = w.pushLocked() })
+	return retry || !acquired
+}
+
+func (w *worker) pushLocked() bool {
 	e := w.engine
 	w.report(Syncing, "Committing...")
 	if err := StageAndCommit(e.dir, "sync: update tasks"); err != nil {

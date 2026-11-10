@@ -2,5 +2,6 @@
 /hopes.exe
 /dist
 *.tmp
-items.json
+/items.json
 .DS_Store
+/.cache

@@ -104,6 +104,10 @@ func (a *App) cyclePriority(idx int, forward bool) {
 }
 
 func (a *App) moveTask(idx int, up bool) {
+	if a.State.SortMode != domain.SortNatural {
+		a.State.SetStatus("Reordering needs Natural sort")
+		return
+	}
 	visible := a.State.FilteredIndices()
 	pos := slices.Index(visible, idx)
 	other := pos + 1

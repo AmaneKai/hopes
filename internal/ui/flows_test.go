@@ -1,9 +1,11 @@
 package ui
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/AmaneKai/hopes/internal/domain"
+	"github.com/AmaneKai/hopes/internal/storage"
 )
 
 var (
@@ -410,4 +412,21 @@ func TestANewTaskIsSelectedWhereverSortingPutsIt(t *testing.T) {
 	s.typeStr("AAA first alphabetically")
 	s.press(enter)
 	expect(t, s.items()[s.cursor()].Title, "AAA first alphabetically")
+}
+
+func TestTwoInstancesMergeInsteadOfLosingEdits(t *testing.T) {
+	dir := t.TempDir()
+	must(t, storage.NewJSONStore(dir).Save(seed()))
+	first, second := openApp(dir), openApp(dir)
+	first.createTask(TaskDraft{ID: newTask, Title: "from first", Workspace: "Work", Priority: domain.Medium})
+	second.createTask(TaskDraft{ID: newTask, Title: "from second", Workspace: "Work", Priority: domain.Medium})
+	reloaded, err := storage.NewJSONStore(dir).Load()
+	must(t, err)
+	var titles []string
+	for _, it := range reloaded {
+		titles = append(titles, it.Title)
+	}
+	if !slices.Contains(titles, "from first") || !slices.Contains(titles, "from second") {
+		t.Fatalf("an edit was lost: %v", titles)
+	}
 }

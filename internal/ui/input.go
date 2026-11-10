@@ -25,6 +25,10 @@ var normalMotions = map[rune]motion{
 
 var arrowMotions = map[KeyCode]motion{KeyLeft: te.MoveLeft, KeyRight: te.MoveRight}
 
+var caretMotions = map[KeyCode]motion{KeyLeft: te.CaretLeft, KeyRight: te.CaretRight}
+
+var caretLineMotions = map[KeyCode]motion{KeyUp: te.CaretUp, KeyDown: te.CaretDown}
+
 var lineMotions = map[KeyCode]motion{KeyUp: te.MoveUp, KeyDown: te.MoveDown}
 
 var lineRuneMotions = map[rune]motion{'k': te.MoveUp, 'j': te.MoveDown}
@@ -130,8 +134,7 @@ func (t *TextInput) normalEdit(buf *string, k Key) {
 func (t *TextInput) insertKey(buf *string, k Key) {
 	switch {
 	case k.IsCtrl('w'):
-		*buf = deleteWordBack(*buf)
-		t.Cursor = te.Len(*buf)
+		t.Cursor = te.DeleteWordBack(buf, t.Cursor)
 	case k.IsCtrl('u'):
 		*buf, t.Cursor = "", 0
 	case k.Code == KeyEnter && t.allowLines:
@@ -146,11 +149,11 @@ func (t *TextInput) insertKey(buf *string, k Key) {
 }
 
 func (t *TextInput) caretKey(buf string, k Key) {
-	carets := map[KeyCode]motion{KeyLeft: te.CaretLeft, KeyRight: te.CaretRight}
-	if t.allowLines {
-		carets[KeyUp], carets[KeyDown] = te.CaretUp, te.CaretDown
+	if m, ok := caretMotions[k.Code]; ok {
+		t.Cursor = m(buf, t.Cursor)
+		return
 	}
-	if m, ok := carets[k.Code]; ok {
+	if m, ok := caretLineMotions[k.Code]; ok && t.allowLines {
 		t.Cursor = m(buf, t.Cursor)
 	}
 }
@@ -172,12 +175,4 @@ func (t *TextInput) visualKey(buf *string, k Key) {
 		t.Cursor = te.DeleteRange(buf, lo, hi)
 		t.Visual, t.Insert = false, k.Is('c')
 	}
-}
-
-func deleteWordBack(s string) string {
-	s = strings.TrimRight(s, " ")
-	if i := strings.LastIndex(s, " "); i >= 0 {
-		return s[:i+1]
-	}
-	return ""
 }

@@ -3,6 +3,8 @@ package ui
 import (
 	"strings"
 
+	"github.com/clipperhouse/displaywidth"
+
 	te "github.com/AmaneKai/hopes/internal/textedit"
 )
 
@@ -35,13 +37,15 @@ func drawField(c *Canvas, r Rect, value, placeholder string, input *TextInput) {
 }
 
 func drawSelectable(c *Canvas, row Rect, line []rune, at, lo, hi int) {
-	x := row.X
-	for i, ch := range line {
+	x, runeIndex := row.X, 0
+	graphemes := displaywidth.StringGraphemes(string(line))
+	for graphemes.Next() {
 		st := styleNone
-		if at+i >= lo && at+i <= hi {
+		if at+runeIndex >= lo && at+runeIndex <= hi {
 			st = styleSelection
 		}
-		x += c.Text(x, row.Y, row.X+row.W-x, string(ch), st)
+		x += c.Text(x, row.Y, row.X+row.W-x, graphemes.Value(), st)
+		runeIndex += te.Len(graphemes.Value())
 	}
 }
 

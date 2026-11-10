@@ -182,7 +182,23 @@ func (c *Canvas) Paint(r Rect, st Style) {
 	}
 }
 
+func isPrintableASCII(text string) bool {
+	for i := 0; i < len(text); i++ {
+		if text[i] < 0x20 || text[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
 func (c *Canvas) Text(x, y, width int, text string, st Style) int {
+	if isPrintableASCII(text) {
+		n := min(len(text), width)
+		for i := 0; i < n; i++ {
+			c.put(x+i, y, text[i:i+1], c.styleAt(x+i, y).Patch(st), false)
+		}
+		return max(n, 0)
+	}
 	used := 0
 	gr := displaywidth.StringGraphemes(text)
 	for gr.Next() && used < width {
@@ -275,6 +291,7 @@ func (c *Canvas) StyleAt(x, y int) Style {
 
 func (c *Canvas) ANSI() string {
 	var b strings.Builder
+	b.Grow(c.W*c.H + c.H*16)
 	for y := range c.H {
 		if y > 0 {
 			b.WriteByte('\n')
@@ -305,29 +322,34 @@ var attrCodes = []struct {
 }{{Bold, "1"}, {Dim, "2"}, {Underline, "4"}, {Reverse, "7"}, {Strike, "9"}}
 
 func sgr(st Style) string {
-	codes := []string{"0"}
+	buf := make([]byte, 0, 40)
+	buf = append(buf, "\x1b[0"...)
 	for _, a := range attrCodes {
 		if st.Attrs&a.attr != 0 {
-			codes = append(codes, a.code)
+			buf = append(buf, ';')
+			buf = append(buf, a.code...)
 		}
 	}
-	codes = appendColor(codes, st.Fg, 30, 90, "38")
-	codes = appendColor(codes, st.Bg, 40, 100, "48")
-	return "\x1b[" + strings.Join(codes, ";") + "m"
+	buf = appendColor(buf, st.Fg, 30, 90, "38")
+	buf = appendColor(buf, st.Bg, 40, 100, "48")
+	return string(append(buf, 'm'))
 }
 
-func appendColor(codes []string, c Color, base, bright int, extended string) []string {
+func appendColor(buf []byte, c Color, base, bright int, extended string) []byte {
 	if c == DefaultColor {
-		return codes
+		return buf
 	}
 	n := int(c) - 1
+	buf = append(buf, ';')
 	switch {
 	case n < 8:
-		return append(codes, strconv.Itoa(base+n))
+		return strconv.AppendInt(buf, int64(base+n), 10)
 	case n < 16:
-		return append(codes, strconv.Itoa(bright+n-8))
+		return strconv.AppendInt(buf, int64(bright+n-8), 10)
 	}
-	return append(codes, extended, "5", strconv.Itoa(n))
+	buf = append(buf, extended...)
+	buf = append(buf, ";5;"...)
+	return strconv.AppendInt(buf, int64(n), 10)
 }
 
 func Width(text string) int { return displaywidth.String(text) }

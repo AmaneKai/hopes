@@ -2,8 +2,11 @@ package config
 
 import (
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/AmaneKai/hopes/internal/paths"
@@ -33,8 +36,14 @@ type Storage struct {
 }
 
 type Config struct {
-	Sync    Sync
-	Storage Storage
+	Sync     Sync
+	Storage  Storage
+	Warnings []string
+}
+
+var knownKeys = map[string][]string{
+	"sync":    {"enabled", "debounce_seconds", "remote", "branch", "pull_on_startup", "data_dir"},
+	"storage": {"backend", "dir", "command"},
 }
 
 var errType = errors.New("config value has the wrong type")
@@ -52,16 +61,20 @@ func Default() Config {
 	}
 }
 
-func Load() Config {
-	data, err := os.ReadFile(filepath.Join(paths.Config(), "config.toml"))
+func Load() (Config, error) {
+	location := filepath.Join(paths.Config(), "config.toml")
+	data, err := os.ReadFile(location)
+	if errors.Is(err, fs.ErrNotExist) {
+		return Default(), nil
+	}
 	if err != nil {
-		return Default()
+		return Default(), fmt.Errorf("read %s: %w", location, err)
 	}
 	cfg, err := Parse(textfile.Normalize(data))
 	if err != nil {
-		return Default()
+		return Default(), fmt.Errorf("parse %s: %w", location, err)
 	}
-	return cfg
+	return cfg, nil
 }
 
 func Parse(text string) (Config, error) {
@@ -90,7 +103,28 @@ func Parse(text string) (Config, error) {
 		return Default(), errors.Join(err, errType)
 	}
 	cfg.Sync.Debounce = time.Duration(seconds) * time.Second
+	cfg.Warnings = unknownKeyWarnings(doc)
 	return cfg, nil
+}
+
+func unknownKeyWarnings(doc map[string]table) []string {
+	var warnings []string
+	for section, entries := range doc {
+		for key := range entries {
+			if !slices.Contains(knownKeys[section], key) {
+				warnings = append(warnings, "unknown key "+qualifiedKey(section, key))
+			}
+		}
+	}
+	slices.Sort(warnings)
+	return warnings
+}
+
+func qualifiedKey(section, key string) string {
+	if section == "" {
+		return key
+	}
+	return section + "." + key
 }
 
 func read[T any](t table, key string, slot *T) error {

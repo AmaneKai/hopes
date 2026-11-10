@@ -25,9 +25,15 @@ jobs:
           - goos: darwin
             goarch: arm64
             asset: hopes-macos-aarch64.tar.gz
+          - goos: linux
+            goarch: arm64
+            asset: hopes-linux-aarch64.tar.gz
           - goos: windows
             goarch: amd64
             asset: hopes-windows-x86_64.zip
+          - goos: windows
+            goarch: arm64
+            asset: hopes-windows-aarch64.zip
 
     steps:
       - uses: actions/checkout@v4
@@ -37,6 +43,9 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Test
+        run: go test ./...
+
       - name: Build Release Binary
         env:
           GOOS: ${{ matrix.goos }}
@@ -44,7 +53,7 @@ jobs:
           CGO_ENABLED: '0'
         run: |
           mkdir dist
-          go build -trimpath -ldflags "-s -w" -o dist/ .
+          go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o dist/ .
 
       - name: Package Archive
         working-directory: dist
